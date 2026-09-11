@@ -337,7 +337,35 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     
     // Calculate layout
     // Instead of h/2, we'll give each line a bit more breathing room by not clipping too strictly
-    int lineHeight = h / 2;
+    bool threeLineMode = (config.threeLine != 0);
+    int lineHeight = threeLineMode ? h / 3 : h / 2;
+
+    // ---- Three-line smooth transition (scroll-up) ----
+    // Detect line change to start transition (mirrors DrawWithYrcHighlight logic)
+    int curLineIdx = g_lyricMgr.GetCurrentLineIndex();
+    if (curLineIdx != m_dualLastLineIndex)
+    {
+        if (m_dualLastLineIndex != -1)
+        {
+            m_dualTransitionStart = GetTickCount64();
+            m_dualInTransition = true;
+        }
+        m_dualLastLineIndex = curLineIdx;
+    }
+    int slideOffset = 0;
+    if (m_dualInTransition)
+    {
+        ULONGLONG tnow = GetTickCount64();
+        if (tnow - m_dualTransitionStart > 350)
+            m_dualInTransition = false;
+        else
+        {
+            float prog = (float)(tnow - m_dualTransitionStart) / 350.0f;
+            prog = 1.0f - pow(1.0f - prog, 3.0f);   // ease-out cubic
+            slideOffset = (int)(lineHeight * prog);
+        }
+    }
+    int drawY = y + slideOffset;   // all three lines shift down by slideOffset, sliding up to rest
     
     // Set colors based on dark mode and adaptive setting
     COLORREF primaryColor, secondaryColor, highlightColor;
@@ -436,10 +464,11 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
             textX1 = x + 5 - (int)m_scrollOffset;
         }
 
-        int textY1 = y + (lineHeight - (wordSizes.empty() ? 0 : wordSizes[0].cy)) / 2;
+        int line1Y = threeLineMode ? (drawY + lineHeight) : drawY;
+        int textY1 = line1Y + (lineHeight - (wordSizes.empty() ? 0 : wordSizes[0].cy)) / 2;
 
         // Clip region for first line
-        HRGN clipRgn1 = CreateRectRgn(x, y, x + w, y + lineHeight + 2);
+        HRGN clipRgn1 = CreateRectRgn(x, line1Y, x + w, line1Y + lineHeight + 2);
         SelectClipRgn(dc, clipRgn1);
 
         int curX = textX1;
@@ -467,7 +496,7 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
                 if (effectiveWidth > 0)
                 {
                     int saveId = SaveDC(dc);
-                    HRGN wordClip = CreateRectRgn(curX, y, curX + effectiveWidth, y + lineHeight + 2);
+                    HRGN wordClip = CreateRectRgn(curX, line1Y, curX + effectiveWidth, line1Y + lineHeight + 2);
                     ExtSelectClipRgn(dc, wordClip, RGN_AND);
                     
                     SetTextColor(dc, highlightColor);
@@ -491,7 +520,8 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
         SIZE size1;
         GetTextExtentPoint32W(dc, line1.c_str(), (int)line1.length(), &size1);
         
-        int textY1 = y + (lineHeight - size1.cy) / 2;
+        int line1Y = threeLineMode ? (drawY + lineHeight) : drawY;
+        int textY1 = line1Y + (lineHeight - size1.cy) / 2;
         int textX1 = x + 5; // Default Left
         
         if (size1.cx < w)
@@ -510,19 +540,20 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
             textX1 = x + 5 - (int)m_scrollOffset;
         }
         
-        HRGN clipRgn1 = CreateRectRgn(x, y, x + w, y + lineHeight + 2);
+        HRGN clipRgn1 = CreateRectRgn(x, line1Y, x + w, line1Y + lineHeight + 2);
         SelectClipRgn(dc, clipRgn1);
         TextOutW(dc, textX1, textY1, line1.c_str(), (int)line1.length());
         SelectClipRgn(dc, NULL);
         DeleteObject(clipRgn1);
     }
     
-    // Draw second line
+    // Draw second line (next): dual=bottom half, three-line=bottom third
     SetTextColor(dc, secondaryColor);
     SIZE size2;
     GetTextExtentPoint32W(dc, line2.c_str(), (int)line2.length(), &size2);
-    
-    int textY2 = y + lineHeight + (lineHeight - size2.cy) / 2;
+
+    int line2Y = threeLineMode ? (drawY + 2 * lineHeight) : (drawY + lineHeight);
+    int textY2 = line2Y + (lineHeight - size2.cy) / 2;
     int textX2 = x + 5;
     
     // Apply alignment for second line
@@ -539,11 +570,41 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     // Scrolling for second line (independent or just static?) - keep it static for now as per design
     
     // Clip for second line - allow a bit room at top for ascenders
-    HRGN clipRgn2 = CreateRectRgn(x, y + lineHeight - 1, x + w, y + h);
+    HRGN clipRgn2 = CreateRectRgn(x, y, x + w, y + h);
     SelectClipRgn(dc, clipRgn2);
     TextOutW(dc, textX2, textY2, line2.c_str(), (int)line2.length());
     SelectClipRgn(dc, NULL);
     DeleteObject(clipRgn2);
+
+    // ---- Draw prev line (three-line mode only): top slot, dimmed ----
+    if (threeLineMode)
+    {
+        std::wstring line0 = g_lyricMgr.GetPrevLyricText();
+        if (!line0.empty())
+        {
+            COLORREF prevColor = RGB(
+                (GetRValue(secondaryColor) * 3) / 5,
+                (GetGValue(secondaryColor) * 3) / 5,
+                (GetBValue(secondaryColor) * 3) / 5);   // 60% dim
+            SetTextColor(dc, prevColor);
+            SIZE size0;
+            GetTextExtentPoint32W(dc, line0.c_str(), (int)line0.length(), &size0);
+            int textY0 = drawY + (lineHeight - size0.cy) / 2;
+            int textX0 = x + 5;
+            if (size0.cx < w)
+            {
+                if (config.dualLineAlignment == 1)
+                    textX0 = x + (w - size0.cx) / 2;
+                else if (config.dualLineAlignment == 2)
+                    textX0 = x + w - size0.cx - 5;
+            }
+            HRGN clipRgn0 = CreateRectRgn(x, y, x + w, y + h);
+            SelectClipRgn(dc, clipRgn0);
+            TextOutW(dc, textX0, textY0, line0.c_str(), (int)line0.length());
+            SelectClipRgn(dc, NULL);
+            DeleteObject(clipRgn0);
+        }
+    }
     
     // Restore original font and cleanup
     SelectObject(dc, oldFont);

@@ -92,6 +92,36 @@ std::wstring LyricManager::GetCurrentLyricText() const
     return std::wstring();
 }
 
+std::wstring LyricManager::GetPrevLyricText() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    int prevIndex = m_currentLineIndex - 1;
+
+    if (g_config.Data().enableYrc && m_lyricData.hasYrc())
+    {
+        if (prevIndex >= 0 && prevIndex < (int)m_lyricData.yrcData.size())
+        {
+            const auto& line = m_lyricData.yrcData[prevIndex];
+            std::wstring result;
+            for (const auto& word : line.words)
+            {
+                result += word.text;
+            }
+            return result;
+        }
+    }
+    else if (m_lyricData.hasLrc())
+    {
+        if (prevIndex >= 0 && prevIndex < (int)m_lyricData.lrcData.size())
+        {
+            return m_lyricData.lrcData[prevIndex].text;
+        }
+    }
+
+    return std::wstring();
+}
+
 std::wstring LyricManager::GetNextLyricText() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);

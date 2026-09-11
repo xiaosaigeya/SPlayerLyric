@@ -33,6 +33,7 @@ struct PluginConfig
     // Dual line display
     bool dualLineDisplay = false;
     int secondLineType = 0; // 0 = next line, 1 = translation, 2 = artist/song info
+    int threeLine = 0; // 0 = dual line (legacy), 1 = three line (prev/cur/next)
     int dualLineAlignment = 0; // 0=Left, 1=Center, 2=Right, 3=Split
 
     // Desktop mode specific

@@ -40,6 +40,7 @@ void Config::Load(const std::wstring& configDir)
     m_config.lyricOffset = (int)GetPrivateProfileIntW(L"Lyric", L"LyricOffset", 0, m_configPath.c_str());
     m_config.dualLineDisplay = GetPrivateProfileIntW(L"Lyric", L"DualLine", 0, m_configPath.c_str()) != 0;
     m_config.secondLineType = GetPrivateProfileIntW(L"Lyric", L"SecondLineType", 0, m_configPath.c_str());
+    m_config.threeLine = GetPrivateProfileIntW(L"Lyric", L"ThreeLine", 0, m_configPath.c_str());
     m_config.dualLineAlignment = GetPrivateProfileIntW(L"Lyric", L"DualLineAlignment", 0, m_configPath.c_str());
     // Load adaptive setting
     m_config.adaptiveColor = GetPrivateProfileIntW(L"Lyric", L"AdaptiveColor", 1, m_configPath.c_str()) != 0;
@@ -104,6 +105,9 @@ void Config::Save()
     WritePrivateProfileStringW(L"Lyric", L"DualLine", m_config.dualLineDisplay ? L"1" : L"0", m_configPath.c_str());
     
     swprintf_s(buffer, L"%d", m_config.secondLineType);
+    WritePrivateProfileStringW(L"Lyric", L"SecondLineType", buffer, m_configPath.c_str());
+    swprintf_s(buffer, L"%d", m_config.threeLine);
+    WritePrivateProfileStringW(L"Lyric", L"ThreeLine", buffer, m_configPath.c_str());
     WritePrivateProfileStringW(L"Lyric", L"SecondLineType", buffer, m_configPath.c_str());
 
     swprintf_s(buffer, L"%d", m_config.dualLineAlignment);

@@ -64,6 +64,9 @@ private:
 
     // Transition state
     mutable int m_lastLineIndex = -1;
+    int m_dualLastLineIndex = -1;
+    bool m_dualInTransition = false;
+    ULONGLONG m_dualTransitionStart = 0;
     mutable ULONGLONG m_transitionStartTime = 0;
     mutable std::wstring m_prevLineText;
     mutable bool m_inTransition = false;

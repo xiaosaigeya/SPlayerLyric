@@ -22,6 +22,7 @@ public:
 
     std::wstring GetCurrentLyricText() const;
     std::wstring GetNextLyricText() const;
+    std::wstring GetPrevLyricText() const;
     std::wstring GetCurrentTranslation() const;
     std::wstring GetSongInfoText() const;
 
