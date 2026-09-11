@@ -24,6 +24,16 @@ jobs:
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
 
+      - name: Install MFC components
+        shell: pwsh
+        run: |
+          $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+          $instPath = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+          $setupPath = Join-Path $instPath 'setup'
+          $args = @('modify', '--installPath', $instPath, '--add', 'Microsoft.VisualStudio.Component.VC.ATL', '--add', 'Microsoft.VisualStudio.Component.VC.MFC', '--quiet', '--norestart', '--nocache')
+          $p = Start-Process -FilePath (Join-Path $setupPath 'vs_installer.exe') -ArgumentList $args -Wait -PassThru
+          Write-Host "installer exit: $($p.ExitCode)"
+
       - name: Build
         working-directory: ${{env.GITHUB_WORKSPACE}}
         run: msbuild /m /p:Configuration=${{ matrix.configuration }} /p:Platform=${{ matrix.platform }} SPlayerLyric.vcxproj
