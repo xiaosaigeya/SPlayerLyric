@@ -39,6 +39,7 @@ private:
     
     void DrawSimpleText(HDC dc, int x, int y, int w, int h, bool dark_mode);
     void DrawDualLine(HDC dc, int x, int y, int w, int h, bool dark_mode);
+    void DrawDualLineInner(HDC dc, int x, int y, int w, int h, bool dark_mode);
     void DrawWithYrcHighlight(HDC dc, int x, int y, int w, int h, bool dark_mode);
     void UpdateScrollAnimation(int textWidth, int areaWidth);
     
@@ -68,6 +69,8 @@ private:
     bool m_dualInTransition = false;
     ULONGLONG m_dualTransitionStart = 0;
     mutable std::wstring m_dualPrevCache;
+    mutable int m_dualSlide = 0;
+    mutable bool m_dualJustSwitched = false;
     mutable ULONGLONG m_transitionStartTime = 0;
     mutable std::wstring m_prevLineText;
     mutable bool m_inTransition = false;
