@@ -154,7 +154,8 @@ void SPlayerLyricPlugin::InitWebSocketCallbacks()
     callbacks.onStatusChange = [this](bool isPlaying) {
         g_lyricMgr.UpdatePlayStatus(isPlaying);
         // Control high-frequency refresh based on play status
-        if (isPlaying && g_config.Data().enableYrc && g_lyricMgr.HasYrcData())
+        // v10: 放开 YRC 限制——LRC 歌也需要高频重绘驱动换行动画（逐字自然缺席）
+        if (isPlaying && g_config.Data().enableYrc && g_lyricMgr.HasAnyLyricData())
         {
             m_lyricItem.StartHighFreqRefresh();
         }
@@ -174,8 +175,9 @@ void SPlayerLyricPlugin::InitWebSocketCallbacks()
 
     callbacks.onLyricChange = [this](const SPlayerProtocol::LyricData& data) {
         g_lyricMgr.UpdateLyrics(data);
-        // Start high-frequency refresh if YRC data is available and playing
-        if (g_config.Data().enableYrc && data.hasYrc() && g_lyricMgr.IsPlaying())
+        // Start high-frequency refresh if lyric data is available and playing
+        // v10: LRC 也启动（换行动画驱动）；兜底 onStatusChange 早于歌词到达的时序
+        if (g_config.Data().enableYrc && (data.hasYrc() || data.hasLrc()) && g_lyricMgr.IsPlaying())
         {
             m_lyricItem.StartHighFreqRefresh();
         }
