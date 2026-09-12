@@ -19,6 +19,11 @@
 // Windows Socket
 #include <WinSock2.h>
 #include <WS2tcpip.h>
+
+// v13: GDI+ 柔和阴影文字（半透明画刷，需初始化见 SPlayerLyricPlugin）
+#include <gdiplus.h>
+#pragma comment(lib, "gdiplus.lib")
+using namespace Gdiplus;
 #pragma comment(lib, "ws2_32.lib")
 
 #endif //PCH_H
