@@ -1037,8 +1037,9 @@ void CALLBACK LyricDisplayItem::HighFreqTimerProc(HWND hwnd, UINT uMsg, UINT_PTR
 {
     if (g_pLyricItem && g_pLyricItem->m_highFreqEnabled && g_pLyricItem->m_taskbarWnd)
     {
-        // Only refresh when YRC is enabled and playing
-        if (g_config.Data().enableYrc && g_lyricMgr.IsPlaying() && g_lyricMgr.HasYrcData())
+        // Only refresh when lyric available and playing
+        // v10: LRC 歌也驱动重绘（换行动画），YRC 逐字缺席时动画照常
+        if (g_config.Data().enableYrc && g_lyricMgr.IsPlaying() && g_lyricMgr.HasAnyLyricData())
         {
             // Invalidate the entire taskbar window to trigger redraw
             // TrafficMonitor will call DrawItem when processing WM_PAINT
