@@ -289,6 +289,41 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     const int LYRIC_ZONE_H = 60;
     bool twoLineTaskbar = (h < 45);
     bool threeLineMode = (config.threeLine != 0) && !twoLineTaskbar;
+    // Set colors based on dark mode and adaptive setting
+    COLORREF primaryColor, secondaryColor, highlightColor;
+    
+    // Choose color set based on mode
+    bool useDarkModeColors = dark_mode;
+    if (!config.adaptiveColor)
+    {
+        // If adaptive disabled, maybe force dark mode colors (legacy behavior) or stick to user preference?
+        // Let's assume non-adaptive means using the "Dark" set (or the legacy set which mapped to Dark)
+        useDarkModeColors = true; 
+    }
+
+    if (useDarkModeColors)
+    {
+        primaryColor = config.darkNormalColor;
+        // For secondary, we can make it slightly dimmer or same as primary
+        // Let's make it 80% brightness of primary or just hardcoded dim if user doesn't specify secondary
+        // Since we only have "Normal" and "Highlight" in config, we derive secondary line color.
+        // Simple approach: Secondary is same as Primary for now, or slight transparency if we could? 
+        // GDI doesn't support alpha easily. Let's stick to Primary.
+        // Actually, user requested "Deep/Light mode color customization". 
+        // We have lightNormalColor and darkNormalColor.
+        
+        secondaryColor = primaryColor;
+        // v18: 歌词三行统一与监控同色（用户需求：只有当前句逐字效果区分层级）
+        highlightColor = config.darkHighlightColor;
+    }
+    else
+    {
+        primaryColor = config.lightNormalColor;
+        secondaryColor = primaryColor;
+        // v18: 同上，亮色模式也不降亮度
+        highlightColor = config.lightHighlightColor;
+    }
+    
     int lyricH = threeLineMode ? LYRIC_ZONE_H : h;          // 歌词布局使用的高度
     int lineHeight = threeLineMode ? lyricH / 3 : h / 2;
 
@@ -446,41 +481,6 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     int drawY = y + lineHeight - bandShift;   // 动画: y+lineHeight→y；静止: y（三行顶=窗口顶）
     // bandT: 动画进度 0→1（颜色插值）；静止恒 1（换行后角色色）
     float bandT = (lineHeight > 0) ? (float)bandShift / (float)lineHeight : 1.0f;
-    
-    // Set colors based on dark mode and adaptive setting
-    COLORREF primaryColor, secondaryColor, highlightColor;
-    
-    // Choose color set based on mode
-    bool useDarkModeColors = dark_mode;
-    if (!config.adaptiveColor)
-    {
-        // If adaptive disabled, maybe force dark mode colors (legacy behavior) or stick to user preference?
-        // Let's assume non-adaptive means using the "Dark" set (or the legacy set which mapped to Dark)
-        useDarkModeColors = true; 
-    }
-
-    if (useDarkModeColors)
-    {
-        primaryColor = config.darkNormalColor;
-        // For secondary, we can make it slightly dimmer or same as primary
-        // Let's make it 80% brightness of primary or just hardcoded dim if user doesn't specify secondary
-        // Since we only have "Normal" and "Highlight" in config, we derive secondary line color.
-        // Simple approach: Secondary is same as Primary for now, or slight transparency if we could? 
-        // GDI doesn't support alpha easily. Let's stick to Primary.
-        // Actually, user requested "Deep/Light mode color customization". 
-        // We have lightNormalColor and darkNormalColor.
-        
-        secondaryColor = primaryColor;
-        // v18: 歌词三行统一与监控同色（用户需求：只有当前句逐字效果区分层级）
-        highlightColor = config.darkHighlightColor;
-    }
-    else
-    {
-        primaryColor = config.lightNormalColor;
-        secondaryColor = primaryColor;
-        // v18: 同上，亮色模式也不降亮度
-        highlightColor = config.lightHighlightColor;
-    }
     
     // Dim if not playing
     if (!g_wsClient.IsConnected() || !g_lyricMgr.IsPlaying())
