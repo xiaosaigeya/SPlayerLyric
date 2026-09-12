@@ -13,6 +13,33 @@
 // Static instance pointer for timer callback
 static LyricDisplayItem* g_pLyricItem = nullptr;
 
+// ---- v17: 默认渲染（定稿：80% 不透明底衬 + 原生 GDI 字体）----
+// 纯 GDI TextOutW（原作者默认观感，ClearType 栅格化），无描边无阴影。
+// 可读性由皮肤背景 alpha 204（80% 不透明）保证，渲染层不做特殊处理。
+// 可选 clip（逐字高亮填充层，GDI 裁剪——与底色层同栅格化引擎，无重影）。
+static void EdgeTextOut(HDC dc, float x, float y, const std::wstring& text,
+                        COLORREF color, HFONT font,
+                        float clipX = -1.0f, float clipW = 0.0f)
+{
+    if (text.empty()) return;
+    COLORREF old = SetTextColor(dc, color);
+    int ix = (int)(x + 0.5f), iy = (int)(y + 0.5f);
+    if (clipW > 0.0f)
+    {
+        int saveId = SaveDC(dc);
+        HRGN clip = CreateRectRgn((int)clipX, iy - 4, (int)(clipX + clipW), iy + 60);
+        ExtSelectClipRgn(dc, clip, RGN_AND);
+        TextOutW(dc, ix, iy, text.c_str(), (int)text.length());
+        RestoreDC(dc, saveId);
+        DeleteObject(clip);
+    }
+    else
+    {
+        TextOutW(dc, ix, iy, text.c_str(), (int)text.length());
+    }
+    SetTextColor(dc, old);
+}
+
 LyricDisplayItem::LyricDisplayItem()
 {
     g_pLyricItem = this;
