@@ -436,7 +436,9 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     }
     
     // If second line is empty, and we are not in "Artist" mode, check if we should show single line
-    if (line2.empty() && config.secondLineType != 2)
+    // v26: 末句驻留——最后一句没有"下一句"，line2 天然为空，此时保持双行布局
+    //      （末句高亮驻留在主槽），不走 DrawSimpleText 单行降级
+    if (line2.empty() && config.secondLineType != 2 && !g_lyricMgr.IsLastLine())
     {
         // Restore old font and use DrawSimpleText instead to use the larger font size if appropriate,
         // OR just draw it centered here with the current dual line font.
@@ -450,13 +452,15 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     }
     
     // Fallback to song info if second line is still empty (e.g., in Artist mode but info empty)
-    if (line2.empty())
+    // v26: 末句时 line2 保持空（副槽留白）——不塞歌名，末句驻留为主视觉
+    if (line2.empty() && !g_lyricMgr.IsLastLine())
     {
         line2 = g_lyricMgr.GetSongInfoText();
     }
 
     // Double check if we still have only one line after fallback
-    if (line2.empty())
+    // v26: 末句时 line2 允许为空（副槽留白，末句驻留主视觉）——其余场景仍走单行降级
+    if (line2.empty() && !g_lyricMgr.IsLastLine())
     {
         SelectObject(dc, oldFont);
         DeleteObject(dualFont);
@@ -601,6 +605,13 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
         // 底色层：整词一次带影绘制（v14 阴影）。
         // 高亮层：GDI+ 裁剪画纯色正文（无阴影）——不与底色层的影叠加，无重影；
         //         无逐字符切分，60fps 无压力（v14 字符切分每帧测宽=卡顿根因）。
+        // v26: 末句驻留——最后一句全部唱完后整句保持高亮色，不回退空白（尾奏/留白期）
+        bool lastLineHold = g_lyricMgr.IsLastLine() && words.size() > 0;
+        if (lastLineHold)
+        {
+            const auto& lastWord = words.back();
+            lastLineHold = (currentTime >= lastWord.startTime + lastWord.duration);
+        }
         int curX = textX1;
         for (size_t i = 0; i < words.size(); ++i)
         {
@@ -618,6 +629,8 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
                 prog = 1.0;
             else if (currentTime >= word.startTime && word.duration > 0)
                 prog = (double)(currentTime - word.startTime) / word.duration;
+            if (lastLineHold)
+                prog = 1.0;   // v26: 末句驻留——全部词按已唱满绘制（整句保持高亮色）
             if (prog > 0.001)
             {
                 int fillW = (int)(width * prog);
@@ -699,11 +712,14 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     // Scrolling for second line (independent or just static?) - keep it static for now as per design
     
     // Clip for second line - allow a bit room at top for ascenders
-    HRGN clipRgn2 = CreateRectRgn(x, y, x + w, y + lyricH);
-    SelectClipRgn(dc, clipRgn2);
-    EdgeTextOut(dc, textX2, textY2, line2, secondaryColor, dualFont);
-    SelectClipRgn(dc, NULL);
-    DeleteObject(clipRgn2);
+    if (!line2.empty())   // v26: 末句时 line2 为空则整块跳过（副槽留白）
+    {
+        HRGN clipRgn2 = CreateRectRgn(x, y, x + w, y + lyricH);
+        SelectClipRgn(dc, clipRgn2);
+        EdgeTextOut(dc, textX2, textY2, line2, secondaryColor, dualFont);
+        SelectClipRgn(dc, NULL);
+        DeleteObject(clipRgn2);
+    }
 
     // ---- v8/v11: A 行（旧顶行）随带整体上移离场 ----
     // 三行：A=旧prev；两行任务栏：A=旧cur（v11 静态缓存于下方 prev 块的 twoLine 分支）。
