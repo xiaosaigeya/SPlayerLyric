@@ -566,7 +566,10 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
 
         // v11: 三行 cur 画槽2（drawY+lineHeight）；两行任务栏/双行 cur 画槽1（drawY）
         int line1Y = (threeLineMode) ? (drawY + lineHeight) : drawY;
+        // v20: 两行任务栏行距优化——行1 上外扩（贴槽顶），与行2 拉开中间空隙
         int textY1 = line1Y + (lineHeight - (wordSizes.empty() ? 0 : wordSizes[0].cy)) / 2;
+        if (twoLineTaskbar && !m_dualInTransition)
+            textY1 -= 2;   // 静止态上移 2px（动画期保持居中，保证起止帧与连续带吻合）
 
         // Clip region for first line
         HRGN clipRgn1 = CreateRectRgn(x, line1Y, x + w, line1Y + lineHeight + 2);
@@ -619,6 +622,8 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
         // v11: 三行 cur 画槽2（drawY+lineHeight）；两行任务栏/双行 cur 画槽1（drawY）
         int line1Y = (threeLineMode) ? (drawY + lineHeight) : drawY;
         int textY1 = line1Y + (lineHeight - size1.cy) / 2;
+        if (twoLineTaskbar && !m_dualInTransition)
+            textY1 -= 2;   // v20: 两行任务栏行1 上外扩（动画期保持居中保证连续性）
         int textX1 = x + 5; // Default Left
         
         if (size1.cx < w)
@@ -654,6 +659,8 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
 
     int line2Y = threeLineMode ? (drawY + 2 * lineHeight) : (drawY + lineHeight);
     int textY2 = line2Y + (lineHeight - size2.cy) / 2;
+    if (twoLineTaskbar && !m_dualInTransition)
+        textY2 += 2;   // v20: 两行任务栏行2 下外扩（与行1 的 -2 对称，中间空隙 2px→6px）
     int textX2 = x + 5;
     
     // Apply alignment for second line
