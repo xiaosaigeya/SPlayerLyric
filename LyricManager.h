@@ -31,6 +31,8 @@ public:
     bool HasAnyLyricData() const;   // v10: YRC 或 LRC 任一存在（高频重绘/动画驱动用，LRC 歌也平滑换行）
     bool IsPlaying() const { return m_isPlaying; }
     int GetCurrentLineIndex() const { return m_currentLineIndex; }
+    // v26: 末句驻留判定——当前行是否为该歌最后一句歌词（末句唱完后保持已唱颜色不回退空白）
+    bool IsLastLine() const;
     float GetWordProgress() const;
     int64_t GetCurrentTime() const;
     
