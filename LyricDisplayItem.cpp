@@ -337,25 +337,28 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     
     // Calculate layout
     // Instead of h/2, we'll give each line a bit more breathing room by not clipping too strictly
-    bool threeLineMode = (config.threeLine != 0);
+    // v11: 按绘制区高度自动分叉——悬浮窗（h>=45）三行 / 任务栏（h<45）两行（当前+下一句）。
+    // 用户需求：任务栏精简两行+换行动画，悬浮窗保留三行。皮肤 layout_s 给矮区即走两行路径。
+    // twoLineTaskbar 模式下：prev 槽画"当前句"（角色=cur），next 槽画"下一句"，无 prev 行。
+    bool twoLineTaskbar = (h < 45);
+    bool threeLineMode = (config.threeLine != 0) && !twoLineTaskbar;
     int lineHeight = threeLineMode ? h / 3 : h / 2;
 
-    // ---- 平滑换行 v8：连续歌词带整体上滚一行（数学上不可能跳）----
-    // 换行前后画面：[A,B,C] -> [B,C,D]（A=旧prev B=旧cur C=旧next D=新next）。
-    // 本质 = 4 行连续带 [A,B,C,D] 整体上移一个行高：
-    //   静态 prev 块（实时 prev=B）+ 第一行块（实时 cur=C，YRC）+ line2 块（实时 next=D）
-    //   三块都以 drawY 为基准，随 bandShift 从 y+lineHeight 连续滚到 y；
-    //   A 行（上一静态帧缓存的顶行）画在 y-bandShift 滑出。
-    // 起止帧与前后静态帧逐像素相同 -> 无缝。颜色随 bandT 同步做角色过渡。
-    // 两行模式（threeLine=0）不参与连续带动画，保持静态换行。
+    // ---- 平滑换行 v8/v11：连续歌词带整体上滚一行（数学上不可能跳）----
+    // 三行：[A,B,C] -> [B,C,D]（A=旧prev B=旧cur C=旧next D=新next），4 行带上移一行。
+    // 两行任务栏(v11)：[B,C] -> [C,D]，带 = [B,C,D] 上移一行——A 不存在（顶行直接是 cur），
+    //   静态时 B 行画在槽1（=drawY 的 cur 位）、C 行画在槽2；换行时 B 滑出、C 升到槽1、D 从底滑入。
+    //   v8 数学通用：bandShift 从 0 滚到 lineHeight，起止帧与静态帧逐像素吻合。
     int curLineIdx = g_lyricMgr.GetCurrentLineIndex();
+    // v11 两行任务栏：换行检测【之前】缓存当前句（此刻仍是旧 cur = 下次动画的 B/A 行）
+    if (twoLineTaskbar && curLineIdx != m_dualLastLineIndex && !line1.empty())
+        m_dualTopRowText = line1;
     if (curLineIdx != m_dualLastLineIndex)
     {
-        if (m_dualLastLineIndex != -1 && threeLineMode)   // 仅三行模式启动动画
+        if (m_dualLastLineIndex != -1 && (threeLineMode || twoLineTaskbar))   // v11: 两行任务栏也启动动画
         {
             m_dualTransitionStart = GetTickCount64();
             m_dualInTransition = true;
-            // m_dualTopRowText 是上一静态帧缓存的顶行（A），此处无需再取数
         }
         m_dualLastLineIndex = curLineIdx;
     }
@@ -508,7 +511,8 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
             textX1 = x + 5 - (int)m_scrollOffset;
         }
 
-        int line1Y = threeLineMode ? (drawY + lineHeight) : drawY;
+        // v11: 三行 cur 画槽2（drawY+lineHeight）；两行任务栏/双行 cur 画槽1（drawY）
+        int line1Y = (threeLineMode) ? (drawY + lineHeight) : drawY;
         int textY1 = line1Y + (lineHeight - (wordSizes.empty() ? 0 : wordSizes[0].cy)) / 2;
 
         // Clip region for first line
@@ -564,7 +568,8 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
         SIZE size1;
         GetTextExtentPoint32W(dc, line1.c_str(), (int)line1.length(), &size1);
         
-        int line1Y = threeLineMode ? (drawY + lineHeight) : drawY;
+        // v11: 三行 cur 画槽2（drawY+lineHeight）；两行任务栏/双行 cur 画槽1（drawY）
+        int line1Y = (threeLineMode) ? (drawY + lineHeight) : drawY;
         int textY1 = line1Y + (lineHeight - size1.cy) / 2;
         int textX1 = x + 5; // Default Left
         
@@ -622,12 +627,22 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     SelectClipRgn(dc, NULL);
     DeleteObject(clipRgn2);
 
-    // ---- v8: A 行（旧顶行）随带整体上移离场 ----
-    // A 行换行前静止在 prev 槽（y 起，prevRoleColor 60% 暗）。
+    // ---- v8/v11: A 行（旧顶行）随带整体上移离场 ----
+    // 三行：A=旧prev；两行任务栏：A=旧cur（v11 静态缓存于下方 prev 块的 twoLine 分支）。
     // 动画期画在 y - bandShift（与主体同一位移场），滚出顶边自然裁掉。
-    if (m_dualInTransition && threeLineMode && bandShift > 0 && !m_dualTopRowText.empty())
+    if (m_dualInTransition && (threeLineMode || twoLineTaskbar) && bandShift > 0 && !m_dualTopRowText.empty())
     {
-        SetTextColor(dc, prevRoleColor);
+        // 三行：A=旧prev（prevRole 恒暗色离场）。
+        // 两行任务栏：A=旧cur（从全高亮绿渐变到暗色离场，与 v8 B 行同款角色过渡）
+        COLORREF aColor = prevRoleColor;
+        if (twoLineTaskbar)
+        {
+            aColor = RGB(
+                GetRValue(leaveCurColor) + (int)((GetRValue(prevRoleColor) - GetRValue(leaveCurColor)) * bandT),
+                GetGValue(leaveCurColor) + (int)((GetGValue(prevRoleColor) - GetGValue(leaveCurColor)) * bandT),
+                GetBValue(leaveCurColor) + (int)((GetBValue(prevRoleColor) - GetBValue(leaveCurColor)) * bandT));
+        }
+        SetTextColor(dc, aColor);
         SIZE szA;
         GetTextExtentPoint32W(dc, m_dualTopRowText.c_str(), (int)m_dualTopRowText.length(), &szA);
         int tY = (y - bandShift) + (lineHeight - szA.cy) / 2;
@@ -651,6 +666,7 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     // （随 bandShift 从 y+lineHeight 滚到 y：B 行从 cur 槽滑到 prev 槽）。
     // 动画期间颜色 bandT 插值（cur 基色→prev 暗色）；静止 = prevRoleColor。
     // A 行（旧顶行）由上方 v8 滑出块绘制，与本块无重叠。
+    // v11 两行任务栏：无 prev 行，此块跳过；但静止期缓存"当前句"作下次动画的 A 行（旧cur）。
     if (threeLineMode)
     {
         std::wstring line0 = g_lyricMgr.GetPrevLyricText();
@@ -677,7 +693,8 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
             DeleteObject(clipRgn0);
         }
     }
-    
+
+
     // Restore original font and cleanup
     SelectObject(dc, oldFont);
     DeleteObject(dualFont);
