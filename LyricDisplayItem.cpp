@@ -284,6 +284,14 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
 {
     const auto& config = g_config.Data();
     
+    // v13.1: 悬浮窗插件区域=全窗 110px，但歌词三行仍只占上部 60px（LYRIC_ZONE_H），
+    //        底部 50px 为监控区。const 提前到函数头（v19 空闲分支也用它）。
+    const int LYRIC_ZONE_H = 60;
+    bool twoLineTaskbar = (h < 45);
+    bool threeLineMode = (config.threeLine != 0) && !twoLineTaskbar;
+    int lyricH = threeLineMode ? LYRIC_ZONE_H : h;          // 歌词布局使用的高度
+    int lineHeight = threeLineMode ? lyricH / 3 : h / 2;
+
     // Create font for dual line mode (uses dualLineFontSize instead of fontSize)
     int dpi = GetDeviceCaps(dc, LOGPIXELSY);
     int fontHeight = -MulDiv(config.dualLineFontSize, dpi, 72);
@@ -318,8 +326,10 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     }
     
     // If no current lyric, show song info or default
+    bool idleMode = false;
     if (line1.empty())
     {
+        idleMode = true;
         if (!g_wsClient.IsConnected())
         {
             line1 = g_config.StringRes(IDS_NOT_CONNECTED);
@@ -331,6 +341,41 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
                 line1 = g_config.StringRes(IDS_NO_LYRIC);
         }
         line2.clear();
+    }
+
+    // ---- v19: 空闲态卡片（悬浮窗三行模式：歌名+状态行填满歌词区，避免黑底大空白）----
+    if (idleMode && threeLineMode && lyricH >= 50)
+    {
+        // 状态行文案（按链路状态区分）
+        std::wstring status;
+        COLORREF statusColor = RGB(158, 162, 172);   // 62% 灰白（层级弱于主文字）
+        if (!g_wsClient.IsConnected())
+            status = L"\u7b49\u5f85\u8fde\u63a5 lx-music...";        // 等待连接 lx-music...
+        else if (g_lyricMgr.IsPlaying())
+            status = L"\u266a \u7b49\u5f85\u6b4c\u8bcd...";           // ♪ 等待歌词...
+        else
+            status = L"\u2016 \u5df2\u6682\u505c";                    // ‖ 已暂停
+
+        // 行1（歌名/提示）画中间槽（原当前句位置）
+        SIZE s1;
+        GetTextExtentPoint32W(dc, line1.c_str(), (int)line1.length(), &s1);
+        int slotMid = y + lyricH / 3;
+        int ty1 = slotMid + (lyricH / 3 - s1.cy) / 2;
+        int tx1 = x + (w - s1.cx) / 2;
+        if (tx1 < x) tx1 = x;   // 超宽贴左
+        EdgeTextOut(dc, (float)tx1, (float)ty1, line1, primaryColor, dualFont);
+
+        // 行2（状态）画底槽
+        SIZE s2;
+        GetTextExtentPoint32W(dc, status.c_str(), (int)status.length(), &s2);
+        int slotBot = y + lyricH * 2 / 3;
+        int ty2 = slotBot + (lyricH / 3 - s2.cy) / 2;
+        int tx2 = x + (w - s2.cx) / 2;
+        EdgeTextOut(dc, (float)tx2, (float)ty2, status, statusColor, dualFont);
+
+        SelectObject(dc, oldFont);
+        DeleteObject(dualFont);
+        return;
     }
     
     // If second line is empty, and we are not in "Artist" mode, check if we should show single line
@@ -364,15 +409,6 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     
     // Calculate layout
     // Instead of h/2, we'll give each line a bit more breathing room by not clipping too strictly
-    // v11: 按绘制区高度自动分叉——悬浮窗（h>=45）三行 / 任务栏（h<45）两行（当前+下一句）。
-    // v13.1: 悬浮窗插件区域=全窗 110px，但歌词三行仍只占上部 60px（LYRIC_ZONE_H），
-    //        底部 50px 留给 DrawItem 尾部的监控行自绘（不重叠）。
-    const int LYRIC_ZONE_H = 60;
-    bool twoLineTaskbar = (h < 45);
-    bool threeLineMode = (config.threeLine != 0) && !twoLineTaskbar;
-    int lyricH = threeLineMode ? LYRIC_ZONE_H : h;          // 歌词布局使用的高度
-    int lineHeight = threeLineMode ? lyricH / 3 : h / 2;
-
     // ---- 平滑换行 v8/v11：连续歌词带整体上滚一行（数学上不可能跳）----
     // 三行：[A,B,C] -> [B,C,D]（A=旧prev B=旧cur C=旧next D=新next），4 行带上移一行。
     // 两行任务栏(v11)：[B,C] -> [C,D]，带 = [B,C,D] 上移一行——A 不存在（顶行直接是 cur），
