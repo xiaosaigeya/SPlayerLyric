@@ -204,6 +204,12 @@ bool LyricManager::HasYrcData() const
     return m_lyricData.hasYrc();
 }
 
+bool LyricManager::HasAnyLyricData() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return m_lyricData.hasYrc() || m_lyricData.hasLrc();
+}
+
 std::vector<SPlayerProtocol::YrcWord> LyricManager::GetCurrentYrcWords() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
