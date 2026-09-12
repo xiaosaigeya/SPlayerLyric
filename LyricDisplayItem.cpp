@@ -255,11 +255,6 @@ void LyricDisplayItem::DrawItem(void* hDC, int x, int y, int w, int h, bool dark
 
 void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dark_mode)
 {
-    DrawDualLineInner(dc, x, y, w, h, dark_mode);
-}
-
-void LyricDisplayItem::DrawDualLineInner(HDC dc, int x, int y, int w, int h, bool dark_mode)
-{
     const auto& config = g_config.Data();
     
     // Create font for dual line mode (uses dualLineFontSize instead of fontSize)
@@ -345,53 +340,44 @@ void LyricDisplayItem::DrawDualLineInner(HDC dc, int x, int y, int w, int h, boo
     bool threeLineMode = (config.threeLine != 0);
     int lineHeight = threeLineMode ? h / 3 : h / 2;
 
-    // ---- 平滑换行 v7：照抄原作者 DrawWithYrcHighlight 的动画模式 ----
-    // 原作者方案（已验证有效）：换行时
-    //   旧句画在 y - yOffset（从原位上移出去）
-    //   新句 textY += enterOffset（从下方滑入）
-    // yOffset/enterOffset 基于【整个绘制区高 h】。
-    // v3-v6 失败根因（终于看清）：drawY = y + slideOffset 且 slideOffset 从 0 递增，
-    // 方向完全反了——内容先【往下沉】再瞬移回原位，视觉=跳动。
-    // v7 正确：enterOffset = h*(1-prog)（从 h 减到 0 = 从下方归位）。
+    // ---- 平滑换行 v8：连续歌词带整体上滚一行（数学上不可能跳）----
+    // 换行前后画面：[A,B,C] -> [B,C,D]（A=旧prev B=旧cur C=旧next D=新next）。
+    // 本质 = 4 行连续带 [A,B,C,D] 整体上移一个行高：
+    //   静态 prev 块（实时 prev=B）+ 第一行块（实时 cur=C，YRC）+ line2 块（实时 next=D）
+    //   三块都以 drawY 为基准，随 bandShift 从 y+lineHeight 连续滚到 y；
+    //   A 行（上一静态帧缓存的顶行）画在 y-bandShift 滑出。
+    // 起止帧与前后静态帧逐像素相同 -> 无缝。颜色随 bandT 同步做角色过渡。
+    // 两行模式（threeLine=0）不参与连续带动画，保持静态换行。
     int curLineIdx = g_lyricMgr.GetCurrentLineIndex();
     if (curLineIdx != m_dualLastLineIndex)
     {
-        if (m_dualLastLineIndex != -1)
+        if (m_dualLastLineIndex != -1 && threeLineMode)   // 仅三行模式启动动画
         {
             m_dualTransitionStart = GetTickCount64();
             m_dualInTransition = true;
-            // 缓存换行前的三行文本（快照滑出用）
-            m_dualSnapTexts.clear();
-            if (threeLineMode)
-            {
-                m_dualSnapTexts.push_back(g_lyricMgr.GetPrevLyricText());
-                m_dualSnapTexts.push_back(g_lyricMgr.GetCurrentLyricText());
-                m_dualSnapTexts.push_back(g_lyricMgr.GetNextLyricText());
-            }
-            else
-            {
-                m_dualSnapTexts.push_back(g_lyricMgr.GetCurrentLyricText());
-                m_dualSnapTexts.push_back(g_lyricMgr.GetNextLyricText());
-            }
+            // m_dualTopRowText 是上一静态帧缓存的顶行（A），此处无需再取数
         }
         m_dualLastLineIndex = curLineIdx;
     }
-    int slideOffset = 0;      // 旧句上移量（0 → h）
-    int enterOffset = 0;      // 新内容从下方滑入量（h → 0）
+    int bandShift = lineHeight;   // 静止 = 换行后布局（drawY=y）；动画中从 0 连续滚到 lineHeight
     if (m_dualInTransition)
     {
         ULONGLONG tnow = GetTickCount64();
         if (tnow - m_dualTransitionStart > 400)
+        {
             m_dualInTransition = false;
+            // bandShift 保持 lineHeight，与下一静态帧无缝
+        }
         else
         {
             float prog = (float)(tnow - m_dualTransitionStart) / 400.0f;
             prog = 1.0f - pow(1.0f - prog, 3.0f);   // ease-out（原作者同款）
-            slideOffset = (int)(h * prog);          // 旧句上移出
-            enterOffset = (int)(h * (1.0f - prog)); // 新内容滑入至归位
+            bandShift = (int)(lineHeight * prog + 0.5f);   // 0 → lineHeight（只滚一个行高）
         }
     }
-    int drawY = y + enterOffset;   // 三行主体整体从下方 h 处滑入归位
+    int drawY = y + lineHeight - bandShift;   // 动画: y+lineHeight→y；静止: y（三行顶=窗口顶）
+    // bandT: 动画进度 0→1（颜色插值）；静止恒 1（换行后角色色）
+    float bandT = (lineHeight > 0) ? (float)bandShift / (float)lineHeight : 1.0f;
     
     // Set colors based on dark mode and adaptive setting
     COLORREF primaryColor, secondaryColor, highlightColor;
@@ -452,6 +438,38 @@ void LyricDisplayItem::DrawDualLineInner(HDC dc, int x, int y, int w, int h, boo
         }
     }
     
+    // v8 连续带角色着色（几何 = 一条带上移一行，颜色随角色同步过渡）：
+    //   B 行（旧当前→新prev）：highlight(YRC唱满)/primary → prevRoleColor（bandT 插值）
+    //   C 行（旧next→新当前）：secondary → primary（bandT 插值；YRC 基色用它）
+    //   A 行（旧顶行离场）：恒 prevRoleColor   D 行（新next 入场）：恒 secondary
+    COLORREF prevRoleColor = RGB(
+        (GetRValue(secondaryColor) * 3) / 5,
+        (GetGValue(secondaryColor) * 3) / 5,
+        (GetBValue(secondaryColor) * 3) / 5);   // 60% dim（与 prev 槽一致）
+    COLORREF leaveCurColor = primaryColor;    // B 行（YRC 时换成 highlight 起点）
+    COLORREF enterCurColor = primaryColor;    // C 行（静止时=primary 正确）
+    {
+        auto words = g_lyricMgr.GetCurrentYrcWords();
+        bool curIsYrc = (config.enableYrc && !words.empty() && g_wsClient.IsConnected() && g_lyricMgr.IsPlaying());
+        if (!curIsYrc)
+            m_dualPrevYrc = false;   // 本帧非 YRC（简单文本），重置标记
+        else
+            m_dualPrevYrc = true;    // 本帧 line1 走 YRC——下一帧换行时 B 行离场起点用 highlight
+        if (m_dualInTransition && m_dualPrevYrc)
+            leaveCurColor = highlightColor;   // B 行换行前是全高亮（逐字填满），离场起点用 highlight
+    }
+    if (m_dualInTransition)
+    {
+        leaveCurColor = RGB(
+            GetRValue(leaveCurColor) + (int)((GetRValue(prevRoleColor) - GetRValue(leaveCurColor)) * bandT),
+            GetGValue(leaveCurColor) + (int)((GetGValue(prevRoleColor) - GetGValue(leaveCurColor)) * bandT),
+            GetBValue(leaveCurColor) + (int)((GetBValue(prevRoleColor) - GetBValue(leaveCurColor)) * bandT));
+        enterCurColor = RGB(
+            GetRValue(secondaryColor) + (int)((GetRValue(primaryColor) - GetRValue(secondaryColor)) * bandT),
+            GetGValue(secondaryColor) + (int)((GetGValue(primaryColor) - GetGValue(secondaryColor)) * bandT),
+            GetBValue(secondaryColor) + (int)((GetBValue(primaryColor) - GetBValue(secondaryColor)) * bandT));
+    }
+
     // Draw first line (current lyric) - use top half
     // If YRC is enabled, use word-by-word discrete highlight for the first line
     auto words = g_lyricMgr.GetCurrentYrcWords();
@@ -503,8 +521,8 @@ void LyricDisplayItem::DrawDualLineInner(HDC dc, int x, int y, int w, int h, boo
             const auto& word = words[i];
             int width = wordSizes[i].cx;
 
-            // 1. Draw Normal Text (Background)
-            SetTextColor(dc, primaryColor);
+            // 1. Draw Normal Text (Background) —— v8: C 行用角色过渡色（动画期从 next 暗色渐变为 cur 基色）
+            SetTextColor(dc, m_dualInTransition ? enterCurColor : primaryColor);
             TextOutW(dc, curX, textY1, word.text.c_str(), (int)word.text.length());
 
             // 2. Draw Highlight Text (Foreground with clip)
@@ -541,8 +559,8 @@ void LyricDisplayItem::DrawDualLineInner(HDC dc, int x, int y, int w, int h, boo
     }
     else
     {
-        // Simple text for first line
-        SetTextColor(dc, primaryColor);
+        // Simple text for first line —— v8: C 行角色色（动画期从 next 暗色渐变到 cur 基色）
+        SetTextColor(dc, m_dualInTransition ? enterCurColor : primaryColor);
         SIZE size1;
         GetTextExtentPoint32W(dc, line1.c_str(), (int)line1.length(), &size1);
         
@@ -574,6 +592,8 @@ void LyricDisplayItem::DrawDualLineInner(HDC dc, int x, int y, int w, int h, boo
     }
     
     // Draw second line (next): dual=bottom half, three-line=bottom third
+    // v8: 三行动画期 line1=C（已由第一行块做 next→cur 渐变），此处 line2=D（新 next）恒 secondary。
+    //     两行模式不参与连续带，保持静态。
     SetTextColor(dc, secondaryColor);
     SIZE size2;
     GetTextExtentPoint32W(dc, line2.c_str(), (int)line2.length(), &size2);
@@ -602,46 +622,43 @@ void LyricDisplayItem::DrawDualLineInner(HDC dc, int x, int y, int w, int h, boo
     SelectClipRgn(dc, NULL);
     DeleteObject(clipRgn2);
 
-    // ---- 旧三行快照上移离场（原作者模式：画在 y - slideOffset，随主体同速上移出）----
-    if (m_dualInTransition && slideOffset > 0 && !m_dualSnapTexts.empty())
+    // ---- v8: A 行（旧顶行）随带整体上移离场 ----
+    // A 行换行前静止在 prev 槽（y 起，prevRoleColor 60% 暗）。
+    // 动画期画在 y - bandShift（与主体同一位移场），滚出顶边自然裁掉。
+    if (m_dualInTransition && threeLineMode && bandShift > 0 && !m_dualTopRowText.empty())
     {
-        // 动画期间画"换行前的三行"（换行瞬间缓存）在上方滑出
-        int oldY = y - slideOffset;   // 与主体 drawY=y+enterOffset 配对：
-                                      // 主体从 y+h 滑到 y，旧行从 y 滑到 y-h，同速同步
-        SetTextColor(dc, secondaryColor);
-        int slotY = oldY;
-        for (const auto& txt : m_dualSnapTexts)
+        SetTextColor(dc, prevRoleColor);
+        SIZE szA;
+        GetTextExtentPoint32W(dc, m_dualTopRowText.c_str(), (int)m_dualTopRowText.length(), &szA);
+        int tY = (y - bandShift) + (lineHeight - szA.cy) / 2;
+        int tX = x + 5;
+        if (szA.cx < w)
         {
-            if (!txt.empty())
-            {
-                SIZE sz;
-                GetTextExtentPoint32W(dc, txt.c_str(), (int)txt.length(), &sz);
-                int tY = slotY + (lineHeight - sz.cy) / 2;
-                int tX = x + 5;
-                if (sz.cx < w)
-                {
-                    if (config.dualLineAlignment == 1)
-                        tX = x + (w - sz.cx) / 2;
-                    else if (config.dualLineAlignment == 2)
-                        tX = x + w - sz.cx - 5;
-                }
-                TextOutW(dc, tX, tY, txt.c_str(), (int)txt.length());
-            }
-            slotY += lineHeight;
+            if (config.dualLineAlignment == 1)
+                tX = x + (w - szA.cx) / 2;
+            else if (config.dualLineAlignment == 2)
+                tX = x + w - szA.cx - 5;
         }
+        HRGN clipA = CreateRectRgn(x, y, x + w, y + h);   // 裁剪到显示区，滚出部分不绘制
+        SelectClipRgn(dc, clipA);
+        TextOutW(dc, tX, tY, m_dualTopRowText.c_str(), (int)m_dualTopRowText.length());
+        SelectClipRgn(dc, NULL);
+        DeleteObject(clipA);
     }
 
     // ---- Draw prev line (three-line mode only): top slot, dimmed ----
+    // v8 连续带：顶槽文本 = 实时 prev（换行后即 B 行），绘制基准 = drawY
+    // （随 bandShift 从 y+lineHeight 滚到 y：B 行从 cur 槽滑到 prev 槽）。
+    // 动画期间颜色 bandT 插值（cur 基色→prev 暗色）；静止 = prevRoleColor。
+    // A 行（旧顶行）由上方 v8 滑出块绘制，与本块无重叠。
     if (threeLineMode)
     {
         std::wstring line0 = g_lyricMgr.GetPrevLyricText();
+        if (!m_dualInTransition)          // 动画期间不重缓存：保持 A 行（换行前的顶行）
+            m_dualTopRowText = line0;     // 静止期刷新缓存 = 下次换行的 A 行
         if (!line0.empty())
         {
-            COLORREF prevColor = RGB(
-                (GetRValue(secondaryColor) * 3) / 5,
-                (GetGValue(secondaryColor) * 3) / 5,
-                (GetBValue(secondaryColor) * 3) / 5);   // 60% dim
-            SetTextColor(dc, prevColor);
+            SetTextColor(dc, m_dualInTransition ? leaveCurColor : prevRoleColor);
             SIZE size0;
             GetTextExtentPoint32W(dc, line0.c_str(), (int)line0.length(), &size0);
             int textY0 = drawY + (lineHeight - size0.cy) / 2;
