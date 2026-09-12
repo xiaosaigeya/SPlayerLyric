@@ -595,7 +595,7 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
             SetTextColor(dc, prevColor);
             SIZE size0;
             GetTextExtentPoint32W(dc, oldPrev.c_str(), (int)oldPrev.length(), &size0);
-            int outY = drawY - (lineHeight - slideOffset);   // 从顶槽继续上滑直至消失
+            int outY = drawY - 2 * slideOffset;   // 旧 prev 从顶槽(y)连续上滑离场：pos = y + slideOffset - 2*slideOffset = y - slideOffset
             int textY0 = outY + (lineHeight - size0.cy) / 2;
             int textX0 = x + 5;
             if (size0.cx < w)
