@@ -509,7 +509,8 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     float bandT = (lineHeight > 0) ? (float)bandShift / (float)lineHeight : 1.0f;
     
     // Dim if not playing
-    if (!g_wsClient.IsConnected() || !g_lyricMgr.IsPlaying())
+    // v27: 末句驻留期不降亮度（保持已唱高亮的完整观感，暂停/尾奏不褪色）
+    if ((!g_wsClient.IsConnected() || !g_lyricMgr.IsPlaying()) && !g_lyricMgr.IsLastLine())
     {
         if (dark_mode)
         {
@@ -532,7 +533,9 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     COLORREF enterCurColor = primaryColor;    // C 行（静止时=primary 正确）
     {
         auto words = g_lyricMgr.GetCurrentYrcWords();
-        bool curIsYrc = (config.enableYrc && !words.empty() && g_wsClient.IsConnected() && g_lyricMgr.IsPlaying());
+        // v27: 末句豁免——末句驻留期（含暂停）保持 YRC 渲染路径，高亮不丢
+        bool curIsYrc = (config.enableYrc && !words.empty() && g_wsClient.IsConnected()
+                         && (g_lyricMgr.IsPlaying() || g_lyricMgr.IsLastLine()));
         if (!curIsYrc)
             m_dualPrevYrc = false;   // 本帧非 YRC（简单文本），重置标记
         else
@@ -555,7 +558,9 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     // Draw first line (current lyric) - use top half
     // If YRC is enabled, use word-by-word discrete highlight for the first line
     auto words = g_lyricMgr.GetCurrentYrcWords();
-    if (config.enableYrc && !words.empty() && g_wsClient.IsConnected() && g_lyricMgr.IsPlaying())
+    // v27: 末句豁免——末句（含已暂停）仍走逐字渲染，驻留高亮持续显示
+    if (config.enableYrc && !words.empty() && g_wsClient.IsConnected()
+        && (g_lyricMgr.IsPlaying() || g_lyricMgr.IsLastLine()))
     {
         int64_t currentTime = g_lyricMgr.GetCurrentTime();
         // Use the highlightColor determined by adaptive logic above, do NOT re-read from config
