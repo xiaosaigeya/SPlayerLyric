@@ -8,6 +8,7 @@
 
 #include "PluginInterface.h"
 #include <string>
+#include <vector>
 #include <atomic>
 
 class LyricDisplayItem : public IPluginItem
@@ -71,6 +72,7 @@ private:
     mutable std::wstring m_dualPrevCache;
     mutable int m_dualSlide = 0;
     mutable bool m_dualJustSwitched = false;
+    mutable std::vector<std::wstring> m_dualSnapTexts;
     mutable ULONGLONG m_transitionStartTime = 0;
     mutable std::wstring m_prevLineText;
     mutable bool m_inTransition = false;
