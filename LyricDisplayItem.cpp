@@ -555,55 +555,51 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
         HRGN clipRgn1 = CreateRectRgn(x, line1Y, x + w, line1Y + lineHeight + 2);
         SelectClipRgn(dc, clipRgn1);
 
-        // ---- v14: 逐字填充单层绘制（结构性消灭重影）----
-        // 每个词拆两段：已唱段(绿)+未唱段(白)，各画一次带影字，【互不重叠】。
-        // 词内分界随进度连续移动；词间边界 = 像素级精确切换。
+        // ---- v14.1: 逐字填充（性能版无重影）----
+        // 底色层：整词一次带影绘制（v14 阴影）。
+        // 高亮层：GDI+ 裁剪画纯色正文（无阴影）——不与底色层的影叠加，无重影；
+        //         无逐字符切分，60fps 无压力（v14 字符切分每帧测宽=卡顿根因）。
         int curX = textX1;
         for (size_t i = 0; i < words.size(); ++i)
         {
             const auto& word = words[i];
             int width = wordSizes[i].cx;
 
+            // 底色层（带影，一次）
+            COLORREF baseC = m_dualInTransition ? enterCurColor : primaryColor;
+            SoftShadowText(dc, (float)curX, (float)textY1, word.text, baseC, dualFont);
+
+            // 高亮层（裁剪纯色正文，无影）
             long long endTime = word.startTime + word.duration;
             double prog = 0.0;
             if (currentTime >= endTime)
                 prog = 1.0;
             else if (currentTime >= word.startTime && word.duration > 0)
                 prog = (double)(currentTime - word.startTime) / word.duration;
-
-            int fillW = (int)(width * prog + 0.5);
-            COLORREF baseC = m_dualInTransition ? enterCurColor : primaryColor;
-            if (fillW <= 0)
+            if (prog > 0.001)
             {
-                // 整词未唱：一次绘制
-                SoftShadowText(dc, (float)curX, (float)textY1, word.text, baseC, dualFont);
-            }
-            else if (fillW >= width)
-            {
-                // 整词已唱：绿色一次绘制
-                SoftShadowText(dc, (float)curX, (float)textY1, word.text, highlightColor, dualFont);
-            }
-            else
-            {
-                // 词内分界：字符级切分（按字符宽度累进到 fillW）
-                int acc = 0;
-                std::wstring sung, unsung;
-                for (wchar_t ch : word.text)
+                int fillW = (int)(width * prog);
+                if (fillW > 0)
                 {
-                    SIZE chs;
-                    GetTextExtentPoint32W(dc, &ch, 1, &chs);
-                    if (acc < fillW)
+                    Gdiplus::Graphics gfx(dc);
+                    gfx.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
+                    Gdiplus::Font gfont(dc, dualFont);
+                    if (gfont.GetLastStatus() == Gdiplus::Ok)
                     {
-                        sung += ch;
-                        acc += chs.cx;
+                        Gdiplus::RectF clipR((Gdiplus::REAL)curX, (Gdiplus::REAL)(textY1 - 4),
+                                             (Gdiplus::REAL)fillW, 200.0f);
+                        gfx.SetClip(clipR);
+                        Gdiplus::StringFormat sf;
+                        sf.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap
+                                          | Gdiplus::StringFormatFlagsNoClip);
+                        sf.SetAlignment(Gdiplus::StringAlignmentNear);
+                        sf.SetLineAlignment(Gdiplus::StringAlignmentNear);
+                        Gdiplus::SolidBrush hb(Gdiplus::Color(255,
+                            GetRValue(highlightColor), GetGValue(highlightColor), GetBValue(highlightColor)));
+                        Gdiplus::PointF pt((Gdiplus::REAL)curX, (Gdiplus::REAL)textY1);
+                        gfx.DrawString(word.text.c_str(), -1, &gfont, pt, &sf, &hb);
                     }
-                    else
-                        unsung += ch;
                 }
-                if (!sung.empty())
-                    SoftShadowText(dc, (float)curX, (float)textY1, sung, highlightColor, dualFont);
-                if (!unsung.empty())
-                    SoftShadowText(dc, (float)(curX + acc), (float)textY1, unsung, baseC, dualFont);
             }
             curX += width;
         }
