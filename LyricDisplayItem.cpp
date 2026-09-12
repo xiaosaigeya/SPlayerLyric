@@ -349,26 +349,16 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
         {
             m_dualTransitionStart = GetTickCount64();
             m_dualInTransition = true;
-            // 缓存换行前的 prev 行（滑出动画用）
-            std::wstring oldPrev = g_lyricMgr.GetPrevLyricText();
-            m_dualPrevCache = oldPrev;
         }
         m_dualLastLineIndex = curLineIdx;
     }
+    // 简化决策：换行时禁用滑行过渡——回归瞬时切换。
+    // 原因：滑行方案在换行瞬间新旧两套行数据并存，插件的数据层(LyricManager)
+    // 在换行帧已全部指向新行，旧行只能靠缓存重绘，与 yrc 高亮/裁剪/对齐
+    // 三套坐标相互干扰，观感"跳动/突兀"（三轮用户反馈验证）。
+    // 在不重构数据层的前提下，闪切是最干净的视觉。
     int slideOffset = 0;
-    if (m_dualInTransition)
-    {
-        ULONGLONG tnow = GetTickCount64();
-        if (tnow - m_dualTransitionStart > 350)
-            m_dualInTransition = false;
-        else
-        {
-            float prog = (float)(tnow - m_dualTransitionStart) / 350.0f;
-            prog = 1.0f - pow(1.0f - prog, 3.0f);   // ease-out cubic
-            slideOffset = (int)(lineHeight * prog);
-        }
-    }
-    int drawY = y + slideOffset;   // all three lines shift down by slideOffset, sliding up to rest
+    int drawY = y;
     
     // Set colors based on dark mode and adaptive setting
     COLORREF primaryColor, secondaryColor, highlightColor;
@@ -578,40 +568,6 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     TextOutW(dc, textX2, textY2, line2.c_str(), (int)line2.length());
     SelectClipRgn(dc, NULL);
     DeleteObject(clipRgn2);
-
-    // ---- Draw incoming line during transition (three-line): slides in from bottom ----
-    if (threeLineMode && m_dualInTransition && slideOffset > 0)
-    {
-        // 换行后的新 next 已在 line2（LyricManager 已更新到新行），
-        // 但静态绘制把它画在最终位置——过渡期需画在 bottom + (lineHeight - slideOffset)
-        //（已经在上面画过 line2 于最终位置，这里补画"即将离场的旧 prev"滑出顶部）
-        std::wstring oldPrev = m_dualPrevCache;
-        if (!oldPrev.empty())
-        {
-            COLORREF prevColor = RGB(
-                (GetRValue(secondaryColor) * 3) / 5,
-                (GetGValue(secondaryColor) * 3) / 5,
-                (GetBValue(secondaryColor) * 3) / 5);
-            SetTextColor(dc, prevColor);
-            SIZE size0;
-            GetTextExtentPoint32W(dc, oldPrev.c_str(), (int)oldPrev.length(), &size0);
-            int outY = drawY - 2 * slideOffset;   // 旧 prev 从顶槽(y)连续上滑离场：pos = y + slideOffset - 2*slideOffset = y - slideOffset
-            int textY0 = outY + (lineHeight - size0.cy) / 2;
-            int textX0 = x + 5;
-            if (size0.cx < w)
-            {
-                if (config.dualLineAlignment == 1)
-                    textX0 = x + (w - size0.cx) / 2;
-                else if (config.dualLineAlignment == 2)
-                    textX0 = x + w - size0.cx - 5;
-            }
-            HRGN clipOut = CreateRectRgn(x, y, x + w, y + h);
-            SelectClipRgn(dc, clipOut);
-            TextOutW(dc, textX0, textY0, oldPrev.c_str(), (int)oldPrev.length());
-            SelectClipRgn(dc, NULL);
-            DeleteObject(clipOut);
-        }
-    }
 
     // ---- Draw prev line (three-line mode only): top slot, dimmed ----
     if (threeLineMode)
