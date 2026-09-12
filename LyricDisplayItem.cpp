@@ -51,11 +51,18 @@ static std::wstring FormatSpeed(double bytesPerSec)
 // 对比 v12 描边：阴影只在右下方向偏移且半透明（alpha 0.55），白字本体完整保留，
 // 视觉"字浮在桌面上"而非"字加了一圈框"。深色背景下阴影几乎不可见，白字原样清晰。
 static void SoftShadowText(HDC dc, int x, int y, const std::wstring& text,
-                           COLORREF color, HFONT font)
+                           COLORREF color, HFONT font,
+                           float clipX = -1.0f, float clipW = 0.0f)
 {
     if (text.empty() || font == nullptr) return;
     Gdiplus::Graphics gfx(dc);
     gfx.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
+    // 可选裁剪（逐字高亮填充用）：裁剪必须同时作用于阴影与正文，否则露出未裁剪的层 = 重影
+    if (clipW > 0.0f)
+    {
+        Gdiplus::RectF clipR(clipX, (Gdiplus::REAL)y - 6.0f, clipW, 256.0f);
+        gfx.SetClip(clipR);
+    }
     // GDI HFONT -> GDI+ Font（继承用户字体设置）
     Gdiplus::Font gfont(dc, font);
     if (gfont.GetLastStatus() != Gdiplus::Ok) return;
@@ -437,11 +444,13 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     // Calculate layout
     // Instead of h/2, we'll give each line a bit more breathing room by not clipping too strictly
     // v11: 按绘制区高度自动分叉——悬浮窗（h>=45）三行 / 任务栏（h<45）两行（当前+下一句）。
-    // 用户需求：任务栏精简两行+换行动画，悬浮窗保留三行。皮肤 layout_s 给矮区即走两行路径。
-    // twoLineTaskbar 模式下：prev 槽画"当前句"（角色=cur），next 槽画"下一句"，无 prev 行。
+    // v13.1: 悬浮窗插件区域=全窗 110px，但歌词三行仍只占上部 60px（LYRIC_ZONE_H），
+    //        底部 50px 留给 DrawItem 尾部的监控行自绘（不重叠）。
+    const int LYRIC_ZONE_H = 60;
     bool twoLineTaskbar = (h < 45);
     bool threeLineMode = (config.threeLine != 0) && !twoLineTaskbar;
-    int lineHeight = threeLineMode ? h / 3 : h / 2;
+    int lyricH = threeLineMode ? LYRIC_ZONE_H : h;          // 歌词布局使用的高度
+    int lineHeight = threeLineMode ? lyricH / 3 : h / 2;
 
     // ---- 平滑换行 v8/v11：连续歌词带整体上滚一行（数学上不可能跳）----
     // 三行：[A,B,C] -> [B,C,D]（A=旧prev B=旧cur C=旧next D=新next），4 行带上移一行。
@@ -642,15 +651,9 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
                 int effectiveWidth = (int)(width * progress);
                 if (effectiveWidth > 0)
                 {
-                    int saveId = SaveDC(dc);
-                    HRGN wordClip = CreateRectRgn(curX, line1Y, curX + effectiveWidth, line1Y + lineHeight + 2);
-                    ExtSelectClipRgn(dc, wordClip, RGN_AND);
-                    
-                    SetTextColor(dc, highlightColor);
-                    TextOutW(dc, curX, textY1, word.text.c_str(), (int)word.text.length());  // 高亮填充层（描边由底色层负责）
-                    
-                    RestoreDC(dc, saveId);
-                    DeleteObject(wordClip);
+                    // v13.1: 高亮层走同一 GDI+ 路径（含同款阴影裁剪），消灭 GDI/GDI+ 双栅格化重影
+                    SoftShadowText(dc, curX, textY1, word.text, highlightColor,
+                                   dualFont, (float)curX, (float)effectiveWidth);
                 }
             }
 
@@ -721,7 +724,7 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     // Scrolling for second line (independent or just static?) - keep it static for now as per design
     
     // Clip for second line - allow a bit room at top for ascenders
-    HRGN clipRgn2 = CreateRectRgn(x, y, x + w, y + h);
+    HRGN clipRgn2 = CreateRectRgn(x, y, x + w, y + lyricH);
     SelectClipRgn(dc, clipRgn2);
     SoftShadowText(dc, textX2, textY2, line2, secondaryColor, dualFont);
     SelectClipRgn(dc, NULL);
@@ -754,7 +757,7 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
             else if (config.dualLineAlignment == 2)
                 tX = x + w - szA.cx - 5;
         }
-        HRGN clipA = CreateRectRgn(x, y, x + w, y + h);   // 裁剪到显示区，滚出部分不绘制
+        HRGN clipA = CreateRectRgn(x, y, x + w, y + lyricH);   // 裁剪到显示区，滚出部分不绘制
         SelectClipRgn(dc, clipA);
         SoftShadowText(dc, tX, tY, m_dualTopRowText, aColor, dualFont);
         SelectClipRgn(dc, NULL);
@@ -786,7 +789,7 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
                 else if (config.dualLineAlignment == 2)
                     textX0 = x + w - size0.cx - 5;
             }
-            HRGN clipRgn0 = CreateRectRgn(x, y, x + w, y + h);
+            HRGN clipRgn0 = CreateRectRgn(x, y, x + w, y + lyricH);
             SelectClipRgn(dc, clipRgn0);
             SoftShadowText(dc, textX0, textY0, line0,
                             m_dualInTransition ? leaveCurColor : prevRoleColor, dualFont);
