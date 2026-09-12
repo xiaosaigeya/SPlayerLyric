@@ -32,9 +32,6 @@ IPluginItem* SPlayerLyricPlugin::GetItem(int index)
 void SPlayerLyricPlugin::DataRequired()
 {
     // WebSocket is async, data already updated by callbacks
-    // v15: 刷新监控原生文案快照（插件自绘用）
-    extern void UpdateMonitorSnapshot();
-    UpdateMonitorSnapshot();
 }
 
 const wchar_t* SPlayerLyricPlugin::GetInfo(PluginInfoIndex index)
@@ -133,8 +130,6 @@ const wchar_t* SPlayerLyricPlugin::GetTooltipInfo()
 void SPlayerLyricPlugin::OnInitialize(ITrafficMonitor* pApp)
 {
     m_pApp = pApp;
-    extern ITrafficMonitor* g_pTMInterface;
-    g_pTMInterface = pApp;   // v15: 监控自绘（原生文案）读取用
 }
 
 void SPlayerLyricPlugin::InitWebSocketCallbacks()
