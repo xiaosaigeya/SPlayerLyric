@@ -57,7 +57,7 @@ static void SoftShadowText(HDC dc, int x, int y, const std::wstring& text,
     Gdiplus::Graphics gfx(dc);
     gfx.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
     // GDI HFONT -> GDI+ Font（继承用户字体设置）
-    Gdiplus::Font gfont(font);
+    Gdiplus::Font gfont(dc, font);
     if (gfont.GetLastStatus() != Gdiplus::Ok) return;
     Gdiplus::StringFormat sf;
     sf.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap
