@@ -210,6 +210,19 @@ bool LyricManager::HasAnyLyricData() const
     return m_lyricData.hasYrc() || m_lyricData.hasLrc();
 }
 
+// v26: 末句驻留判定——当前行是否为最后一句（唱完后保持已唱颜色，不回退空白）
+bool LyricManager::IsLastLine() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    if (m_currentLineIndex < 0)
+        return false;
+    if (g_config.Data().enableYrc && m_lyricData.hasYrc())
+        return m_currentLineIndex == (int)m_lyricData.yrcData.size() - 1;
+    if (m_lyricData.hasLrc())
+        return m_currentLineIndex == (int)m_lyricData.lrcData.size() - 1;
+    return false;
+}
+
 std::vector<SPlayerProtocol::YrcWord> LyricManager::GetCurrentYrcWords() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);
