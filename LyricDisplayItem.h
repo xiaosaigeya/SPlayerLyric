@@ -40,7 +40,6 @@ private:
     
     void DrawSimpleText(HDC dc, int x, int y, int w, int h, bool dark_mode);
     void DrawDualLine(HDC dc, int x, int y, int w, int h, bool dark_mode);
-    void DrawDualLineInner(HDC dc, int x, int y, int w, int h, bool dark_mode);
     void DrawWithYrcHighlight(HDC dc, int x, int y, int w, int h, bool dark_mode);
     void UpdateScrollAnimation(int textWidth, int areaWidth);
     
@@ -65,15 +64,15 @@ private:
     mutable std::wstring m_itemName;
 
     // Transition state
+    // 原作者单行模式动画状态（DrawWithYrcHighlight 使用，勿删！）
     mutable int m_lastLineIndex = -1;
-    int m_dualLastLineIndex = -1;
-    bool m_dualInTransition = false;
-    ULONGLONG m_dualTransitionStart = 0;
-    mutable std::wstring m_dualPrevCache;
-    mutable int m_dualSlide = 0;
-    mutable bool m_dualJustSwitched = false;
-    mutable std::vector<std::wstring> m_dualSnapTexts;
     mutable ULONGLONG m_transitionStartTime = 0;
     mutable std::wstring m_prevLineText;
     mutable bool m_inTransition = false;
+    // v8 连续带动画状态（三行模式）
+    int m_dualLastLineIndex = -1;
+    bool m_dualInTransition = false;
+    ULONGLONG m_dualTransitionStart = 0;
+    mutable std::wstring m_dualTopRowText;   // 静止期缓存的顶行(A)，换行时随带上移离场
+    mutable bool m_dualPrevYrc = false;      // 上一帧 line1 是否走 YRC 渲染（决定 B 行离场起始色）
 };
