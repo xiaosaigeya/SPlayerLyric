@@ -255,64 +255,7 @@ void LyricDisplayItem::DrawItem(void* hDC, int x, int y, int w, int h, bool dark
 
 void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dark_mode)
 {
-    // ===== 平滑换行 v6：整帧快照架构 =====
-    // 所有绘制重定向到内存位图（高 2h：上半=上一帧快照，下半=本帧），
-    // 本帧画完后按动画进度把位图整体 BitBlt 到目标 DC（单一位图平移）。
-    static HDC s_memDC = nullptr;
-    static HBITMAP s_memBmp = nullptr;
-    static int s_bw = 0, s_bh = 0;
-    HDC targetDC = dc;
-    int targetY = y;
-    bool threeLineCfg = (g_config.Data().threeLine != 0);
-    if (threeLineCfg && w > 0 && h > 0)
-    {
-        if (!s_memDC)
-            s_memDC = CreateCompatibleDC(dc);
-        if (s_memBmp && (s_bw != w || s_bh != h * 2))
-        {
-            DeleteObject(s_memBmp);
-            s_memBmp = nullptr;
-        }
-        if (!s_memBmp)
-        {
-            s_memBmp = CreateCompatibleBitmap(dc, w, h * 2);
-            s_bw = w; s_bh = h * 2;
-        }
-        // 换行检测前：先把位图上半(h)复制一份到"旧帧区"顶部（快照机制见下方动画逻辑）
-        // 实际快照在检测到换行时执行：把下半（当前内容）上移 h。
-        SelectObject(s_memDC, s_memBmp);
-        dc = s_memDC;           // 后续所有绘制进位图下半部（坐标整体 +h）
-        y = h;                  // 绘制目标区：位图下半
-        // 清空本帧区域
-        HBRUSH bg = (HBRUSH)GetStockObject(BLACK_BRUSH);
-        RECT rc = { 0, h, w, h * 2 };
-        FillRect(dc, &rc, bg);
-    }
     DrawDualLineInner(dc, x, y, w, h, dark_mode);
-    if (threeLineCfg && s_memDC)
-    {
-        dc = targetDC;
-        y = targetY;
-        // 动画：slideOffset 已在 Inner 里算好（存到成员 m_dualSlide）
-        // 快照逻辑：若刚检测到换行（Inner 里置 m_dualInTransition），把下半复制到上半
-        if (m_dualJustSwitched)
-        {
-            BitBlt(s_memDC, 0, 0, w, h, s_memDC, 0, h, SRCCOPY);
-            m_dualJustSwitched = false;
-        }
-        int off = m_dualSlide;
-        if (off > 0)
-        {
-            // 位图内容 = [0,h):旧帧  [h,2h):新帧
-            // 显示窗口 [0,h)：srcY = h - off → 旧帧上移出，新帧滑入
-            BitBlt(dc, x, y, w, h, s_memDC, 0, h - off, SRCCOPY);
-        }
-        else
-        {
-            // 静止：直接画新帧
-            BitBlt(dc, x, y, w, h, s_memDC, 0, h, SRCCOPY);
-        }
-    }
 }
 
 void LyricDisplayItem::DrawDualLineInner(HDC dc, int x, int y, int w, int h, bool dark_mode)
@@ -402,12 +345,14 @@ void LyricDisplayItem::DrawDualLineInner(HDC dc, int x, int y, int w, int h, boo
     bool threeLineMode = (config.threeLine != 0);
     int lineHeight = threeLineMode ? h / 3 : h / 2;
 
-    // ---- 平滑换行 v6：整帧快照滚动 ----
-    // 原理：换行瞬间把"旧三行"渲染进一张内存位图缓存（m_dualSnapBmp, 高=2h），
-    // 上半 h = 旧三行，下半 h = 新三行（本帧绘制目标）。
-    // 动画期间：新帧正常绘制新三行于内存位图下半部，
-    // 然后把位图从 (srcY = h - offset) 开始整帧 BitBlt 到目标 DC——
-    // 旧行整体上移出、新行整体滑入，全图单一位图平移，无逐元素坐标缝。
+    // ---- 平滑换行 v7：照抄原作者 DrawWithYrcHighlight 的动画模式 ----
+    // 原作者方案（已验证有效）：换行时
+    //   旧句画在 y - yOffset（从原位上移出去）
+    //   新句 textY += enterOffset（从下方滑入）
+    // yOffset/enterOffset 基于【整个绘制区高 h】。
+    // v3-v6 失败根因（终于看清）：drawY = y + slideOffset 且 slideOffset 从 0 递增，
+    // 方向完全反了——内容先【往下沉】再瞬移回原位，视觉=跳动。
+    // v7 正确：enterOffset = h*(1-prog)（从 h 减到 0 = 从下方归位）。
     int curLineIdx = g_lyricMgr.GetCurrentLineIndex();
     if (curLineIdx != m_dualLastLineIndex)
     {
@@ -415,25 +360,38 @@ void LyricDisplayItem::DrawDualLineInner(HDC dc, int x, int y, int w, int h, boo
         {
             m_dualTransitionStart = GetTickCount64();
             m_dualInTransition = true;
-            m_dualJustSwitched = true;   // 告知外层：把当前位图内容快照到上半部
+            // 缓存换行前的三行文本（快照滑出用）
+            m_dualSnapTexts.clear();
+            if (threeLineMode)
+            {
+                m_dualSnapTexts.push_back(g_lyricMgr.GetPrevLyricText());
+                m_dualSnapTexts.push_back(g_lyricMgr.GetCurrentLyricText());
+                m_dualSnapTexts.push_back(g_lyricMgr.GetNextLyricText());
+            }
+            else
+            {
+                m_dualSnapTexts.push_back(g_lyricMgr.GetCurrentLyricText());
+                m_dualSnapTexts.push_back(g_lyricMgr.GetNextLyricText());
+            }
         }
         m_dualLastLineIndex = curLineIdx;
     }
-    int slideOffset = 0;
+    int slideOffset = 0;      // 旧句上移量（0 → h）
+    int enterOffset = 0;      // 新内容从下方滑入量（h → 0）
     if (m_dualInTransition)
     {
         ULONGLONG tnow = GetTickCount64();
-        if (tnow - m_dualTransitionStart > 300)
+        if (tnow - m_dualTransitionStart > 400)
             m_dualInTransition = false;
         else
         {
-            float prog = (float)(tnow - m_dualTransitionStart) / 300.0f;
-            prog = 1.0f - pow(1.0f - prog, 3.0f);   // ease-out
-            slideOffset = (int)(h * prog);          // 0 → h（整窗高度）
+            float prog = (float)(tnow - m_dualTransitionStart) / 400.0f;
+            prog = 1.0f - pow(1.0f - prog, 3.0f);   // ease-out（原作者同款）
+            slideOffset = (int)(h * prog);          // 旧句上移出
+            enterOffset = (int)(h * (1.0f - prog)); // 新内容滑入至归位
         }
     }
-    m_dualSlide = slideOffset;   // 外层 BitBlt 用
-    int drawY = y;
+    int drawY = y + enterOffset;   // 三行主体整体从下方 h 处滑入归位
     
     // Set colors based on dark mode and adaptive setting
     COLORREF primaryColor, secondaryColor, highlightColor;
@@ -643,6 +601,35 @@ void LyricDisplayItem::DrawDualLineInner(HDC dc, int x, int y, int w, int h, boo
     TextOutW(dc, textX2, textY2, line2.c_str(), (int)line2.length());
     SelectClipRgn(dc, NULL);
     DeleteObject(clipRgn2);
+
+    // ---- 旧三行快照上移离场（原作者模式：画在 y - slideOffset，随主体同速上移出）----
+    if (m_dualInTransition && slideOffset > 0 && !m_dualSnapTexts.empty())
+    {
+        // 动画期间画"换行前的三行"（换行瞬间缓存）在上方滑出
+        int oldY = y - slideOffset;   // 与主体 drawY=y+enterOffset 配对：
+                                      // 主体从 y+h 滑到 y，旧行从 y 滑到 y-h，同速同步
+        SetTextColor(dc, secondaryColor);
+        int slotY = oldY;
+        for (const auto& txt : m_dualSnapTexts)
+        {
+            if (!txt.empty())
+            {
+                SIZE sz;
+                GetTextExtentPoint32W(dc, txt.c_str(), (int)txt.length(), &sz);
+                int tY = slotY + (lineHeight - sz.cy) / 2;
+                int tX = x + 5;
+                if (sz.cx < w)
+                {
+                    if (config.dualLineAlignment == 1)
+                        tX = x + (w - sz.cx) / 2;
+                    else if (config.dualLineAlignment == 2)
+                        tX = x + w - sz.cx - 5;
+                }
+                TextOutW(dc, tX, tY, txt.c_str(), (int)txt.length());
+            }
+            slotY += lineHeight;
+        }
+    }
 
     // ---- Draw prev line (three-line mode only): top slot, dimmed ----
     if (threeLineMode)
