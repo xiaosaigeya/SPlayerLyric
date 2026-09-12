@@ -378,7 +378,29 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
         line2.clear();
     }
 
-    // ---- v19: 空闲态卡片（悬浮窗三行模式：歌名+状态行填满歌词区，避免黑底大空白）----
+    // ---- v19/v21: 空闲态卡片（悬浮窗三行：歌名+状态行填满；任务栏两行：歌名画槽1）----
+    if (idleMode && twoLineTaskbar)
+    {
+        // 任务栏空闲：歌名以双行字号画在槽1（与播放态同字号同左对齐，杜绝 DrawSimpleText 大字偏移）
+        SIZE s1;
+        GetTextExtentPoint32W(dc, line1.c_str(), (int)line1.length(), &s1);
+        int ty = y + (h - s1.cy) / 2 - 2;   // 与 v20.1 行1 外扩一致
+        int tx = x + 5;
+        if (s1.cx > w - 10)
+        {
+            RECT rc1 = { tx, ty, x + w - 5, ty + s1.cy };
+            SetTextColor(dc, RGB(158, 162, 172));   // 空闲弱化灰
+            DrawTextW(dc, line1.c_str(), (int)line1.length(), &rc1,
+                      DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+        }
+        else
+        {
+            EdgeTextOut(dc, (float)tx, (float)ty, line1, RGB(158, 162, 172), dualFont);
+        }
+        SelectObject(dc, oldFont);
+        DeleteObject(dualFont);
+        return;
+    }
     if (idleMode && threeLineMode && lyricH >= 50)
     {
         // 状态行文案（按链路状态区分）
