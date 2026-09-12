@@ -13,7 +13,29 @@
 // Static instance pointer for timer callback
 static LyricDisplayItem* g_pLyricItem = nullptr;
 
-// GDI+ 初始化（SoftShadowText 依赖；进程级一次）
+// v15: TM 接口（监控自绘用，文案走 GetMonitorValueString 与原生一字不差）
+ITrafficMonitor* g_pTMInterface = nullptr;
+// 原生文案快照（DataRequired 线程写，绘制线程读；6 项：↑ ↓ CPU 内存 显卡 CPU温度）
+static std::wstring g_monText[6];
+static bool g_monValid = false;
+
+void UpdateMonitorSnapshot()
+{
+    if (!g_pTMInterface) return;
+    static const ITrafficMonitor::MonitorItem items[6] = {
+        ITrafficMonitor::MI_UP, ITrafficMonitor::MI_DOWN,
+        ITrafficMonitor::MI_CPU, ITrafficMonitor::MI_MEMORY,
+        ITrafficMonitor::MI_GPU_USAGE, ITrafficMonitor::MI_CPU_TEMP,
+    };
+    for (int i = 0; i < 6; ++i)
+    {
+        const wchar_t* s = g_pTMInterface->GetMonitorValueString(items[i]);
+        g_monText[i] = s ? s : L"";
+    }
+    g_monValid = true;
+}
+
+// GDI+ 初始化（EdgeTextOut 依赖；进程级一次）
 static struct GdiplusInit {
     GdiplusInit() {
         Gdiplus::GdiplusStartupInput si;
@@ -23,28 +45,41 @@ static struct GdiplusInit {
     ULONG_PTR token = 0;
 } s_gdiplusInit;
 
-// ---- v14: GDI+ 统一文字渲染（PointF 精确定位）----
-// 右下 1px 浓影（alpha 0.78）：观感=字形右下一条细边，白底勾出轮廓、深底几乎不可见。
-// 对比历史：v12 四向描边(粗)、v13 双层阴影叠加(重影根因)。v14 单层单次绘制。
-static void SoftShadowText(HDC dc, float x, float y, const std::wstring& text,
-                           COLORREF color, HFONT font)
+// ---- v15: 抗锯齿路径描边文字（GraphicsPath + Widen，白底/深底全可读）----
+// 与 v12 GDI 硬描边的区别：GDI+ 路径填充边缘抗锯齿，1px 细边柔和不糊字。
+// 监控/歌词统一用此函数。可选 clip（逐字高亮填充层）。
+static void EdgeTextOut(HDC dc, float x, float y, const std::wstring& text,
+                        COLORREF color, HFONT font,
+                        float clipX = -1.0f, float clipW = 0.0f)
 {
     if (text.empty() || font == nullptr) return;
     Gdiplus::Graphics gfx(dc);
     gfx.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
+    gfx.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     Gdiplus::Font gfont(dc, font);
     if (gfont.GetLastStatus() != Gdiplus::Ok) return;
-    Gdiplus::StringFormat sf;
-    sf.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap
-                      | Gdiplus::StringFormatFlagsNoClip);
-    sf.SetAlignment(Gdiplus::StringAlignmentNear);
-    sf.SetLineAlignment(Gdiplus::StringAlignmentNear);
-    Gdiplus::PointF pt(x, y);
-    Gdiplus::SolidBrush shadowB(Gdiplus::Color(200, 12, 12, 16));
-    Gdiplus::PointF ptS(x + 1.0f, y + 1.0f);
-    gfx.DrawString(text.c_str(), -1, &gfont, ptS, &sf, &shadowB);
-    Gdiplus::SolidBrush bodyB(Gdiplus::Color(255, GetRValue(color), GetGValue(color), GetBValue(color)));
-    gfx.DrawString(text.c_str(), -1, &gfont, pt, &sf, &bodyB);
+    Gdiplus::FontFamily ff;
+    if (gfont.GetFamily(&ff) != Gdiplus::Ok) return;
+    Gdiplus::GraphicsPath path;
+    Gdiplus::PointF origin(x, y);
+    path.AddString(text.c_str(), -1, &ff, gfont.GetStyle(), gfont.GetSize(),
+                   origin, Gdiplus::StringFormat::GenericTypographic());
+    if (clipW > 0.0f)
+    {
+        Gdiplus::RectF clipR(clipX, y - 8.0f, clipW, 260.0f);
+        gfx.SetClip(clipR);
+    }
+    // 边：Widen 扩张 2.0px pen（每边约 1px）后填充深色——抗锯齿柔和细边
+    Gdiplus::Pen edgePen(Gdiplus::Color(220, 16, 16, 22), 2.0f);
+    Gdiplus::GraphicsPath widePath;
+    widePath.AddPath(&path, FALSE);
+    widePath.Widen(&edgePen);
+    Gdiplus::SolidBrush edgeB(Gdiplus::Color(220, 16, 16, 22));
+    gfx.FillPath(&edgeB, &widePath);
+    // 本体
+    Gdiplus::SolidBrush bodyB(Gdiplus::Color(255,
+        GetRValue(color), GetGValue(color), GetBValue(color)));
+    gfx.FillPath(&bodyB, &path);
 }
 
 LyricDisplayItem::LyricDisplayItem()
@@ -278,6 +313,37 @@ void LyricDisplayItem::DrawItem(void* hDC, int x, int y, int w, int h, bool dark
     else
     {
         DrawSimpleText(dc, x, y, w, h, dark_mode);
+    }
+
+    // ---- v15: 监控行插件自绘（文案=TM 原生 GetMonitorValueString，描边字白底可读）----
+    // 行1: ↑速度  CPU  温度   行2: ↓速度  内存  显卡（仅悬浮窗三行模式，歌词区下方）
+    if (config.desktopDualLine && h >= 100 && g_monValid)
+    {
+        int dpi2 = GetDeviceCaps(dc, LOGPIXELSY);
+        int mFontH = -MulDiv(9, dpi2, 72);
+        HFONT monFont = CreateFontW(
+            mFontH, 0, 0, 0, FW_NORMAL,
+            FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+            config.fontName.c_str());
+        if (monFont)
+        {
+            // 原生文案直接拼接（"↑: 12KB/s" 等，含皮肤 display_text 前缀由 TM 处理）
+            std::wstring lineA = g_monText[0] + L"    " + g_monText[2] + L"    " + g_monText[5];
+            std::wstring lineB = g_monText[1] + L"    " + g_monText[3] + L"    " + g_monText[4];
+            COLORREF monColor = dark_mode ? RGB(220, 228, 236) : RGB(70, 84, 100);
+            SIZE szA;
+            HFONT oldMon = (HFONT)SelectObject(dc, monFont);
+            GetTextExtentPoint32W(dc, lineA.c_str(), (int)lineA.length(), &szA);
+            int textH = szA.cy;
+            int monY = y + h - textH * 2 - 8;
+            int xa = x + (w - szA.cx) / 2;
+            EdgeTextOut(dc, (float)xa, (float)monY, lineA, monColor, monFont);
+            EdgeTextOut(dc, (float)xa, (float)(monY + textH + 4), lineB, monColor, monFont);
+            SelectObject(dc, oldMon);
+            DeleteObject(monFont);
+        }
     }
 
     // Restore font
@@ -567,7 +633,7 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
 
             // 底色层（带影，一次）
             COLORREF baseC = m_dualInTransition ? enterCurColor : primaryColor;
-            SoftShadowText(dc, (float)curX, (float)textY1, word.text, baseC, dualFont);
+            EdgeTextOut(dc, (float)curX, (float)textY1, word.text, baseC, dualFont);
 
             // 高亮层（裁剪纯色正文，无影）
             long long endTime = word.startTime + word.duration;
@@ -581,24 +647,10 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
                 int fillW = (int)(width * prog);
                 if (fillW > 0)
                 {
-                    Gdiplus::Graphics gfx(dc);
-                    gfx.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
-                    Gdiplus::Font gfont(dc, dualFont);
-                    if (gfont.GetLastStatus() == Gdiplus::Ok)
-                    {
-                        Gdiplus::RectF clipR((Gdiplus::REAL)curX, (Gdiplus::REAL)(textY1 - 4),
-                                             (Gdiplus::REAL)fillW, 200.0f);
-                        gfx.SetClip(clipR);
-                        Gdiplus::StringFormat sf;
-                        sf.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap
-                                          | Gdiplus::StringFormatFlagsNoClip);
-                        sf.SetAlignment(Gdiplus::StringAlignmentNear);
-                        sf.SetLineAlignment(Gdiplus::StringAlignmentNear);
-                        Gdiplus::SolidBrush hb(Gdiplus::Color(255,
-                            GetRValue(highlightColor), GetGValue(highlightColor), GetBValue(highlightColor)));
-                        Gdiplus::PointF pt((Gdiplus::REAL)curX, (Gdiplus::REAL)textY1);
-                        gfx.DrawString(word.text.c_str(), -1, &gfont, pt, &sf, &hb);
-                    }
+                    // 高亮填充层：同款描边字 + 裁剪（边只画进裁剪区，与底色层边一致）
+                    EdgeTextOut(dc, (float)curX, (float)textY1, word.text,
+                                highlightColor, dualFont,
+                                (float)curX, (float)fillW);
                 }
             }
             curX += width;
@@ -636,7 +688,7 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
         
         HRGN clipRgn1 = CreateRectRgn(x, line1Y, x + w, line1Y + lineHeight + 2);
         SelectClipRgn(dc, clipRgn1);
-        SoftShadowText(dc, textX1, textY1, line1,
+        EdgeTextOut(dc, textX1, textY1, line1,
                         m_dualInTransition ? enterCurColor : primaryColor, dualFont);
         SelectClipRgn(dc, NULL);
         DeleteObject(clipRgn1);
@@ -669,7 +721,7 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     // Clip for second line - allow a bit room at top for ascenders
     HRGN clipRgn2 = CreateRectRgn(x, y, x + w, y + lyricH);
     SelectClipRgn(dc, clipRgn2);
-    SoftShadowText(dc, textX2, textY2, line2, secondaryColor, dualFont);
+    EdgeTextOut(dc, textX2, textY2, line2, secondaryColor, dualFont);
     SelectClipRgn(dc, NULL);
     DeleteObject(clipRgn2);
 
@@ -702,7 +754,7 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
         }
         HRGN clipA = CreateRectRgn(x, y, x + w, y + lyricH);   // 裁剪到显示区，滚出部分不绘制
         SelectClipRgn(dc, clipA);
-        SoftShadowText(dc, tX, tY, m_dualTopRowText, aColor, dualFont);
+        EdgeTextOut(dc, tX, tY, m_dualTopRowText, aColor, dualFont);
         SelectClipRgn(dc, NULL);
         DeleteObject(clipA);
     }
@@ -734,7 +786,7 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
             }
             HRGN clipRgn0 = CreateRectRgn(x, y, x + w, y + lyricH);
             SelectClipRgn(dc, clipRgn0);
-            SoftShadowText(dc, textX0, textY0, line0,
+            EdgeTextOut(dc, textX0, textY0, line0,
                             m_dualInTransition ? leaveCurColor : prevRoleColor, dualFont);
             SelectClipRgn(dc, NULL);
             DeleteObject(clipRgn0);
