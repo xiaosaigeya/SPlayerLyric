@@ -660,7 +660,7 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     int line2Y = threeLineMode ? (drawY + 2 * lineHeight) : (drawY + lineHeight);
     int textY2 = line2Y + (lineHeight - size2.cy) / 2;
     if (twoLineTaskbar && !m_dualInTransition)
-        textY2 += 2;   // v20: 两行任务栏行2 下外扩（与行1 的 -2 对称，中间空隙 2px→6px）
+        textY2 += 1;   // v20.1: 行2 下外扩收窄为 +1（+2 会触底被 36px 窗口裁剪）；与行1 的 -2 配合间隙 ~5px
     int textX2 = x + 5;
     
     // Apply alignment for second line
