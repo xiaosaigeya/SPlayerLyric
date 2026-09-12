@@ -11,7 +11,7 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022
 
     strategy:
       matrix:
@@ -23,45 +23,6 @@ jobs:
 
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
-
-      - name: Install MFC components
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
-          $instPath = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
-          Write-Host "VS install path: $instPath"
-          # VS18 的 Installer 引导程序位置
-          $candidates = @(
-            "C:\Program Files (x86)\Microsoft Visual Studio\Installer\setup.exe",
-            "C:\Program Files\Microsoft Visual Studio\Installer\setup.exe",
-            (Join-Path $instPath "setup.exe")
-          )
-          $setupExe = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-          Write-Host "using installer: $setupExe"
-          # 数组式参数（字符串式在部分版本静默失败）
-          $argList = @(
-            'modify',
-            "--installPath", $instPath,
-            '--add', 'Microsoft.VisualStudio.Component.VC.ATL',
-            '--add', 'Microsoft.VisualStudio.Component.VC.MFC',
-            '--quiet', '--norestart', '--nocache',
-            '--wait'   # 等待安装完成而非仅等进程返回
-          )
-          $p = Start-Process -FilePath $setupExe -ArgumentList ($argList -join ' ') -Wait -PassThru
-          Write-Host "installer exit: $($p.ExitCode)"
-          # 校验 MFC 真的装上了（atlmfc 目录存在）
-          $mfcDir = Join-Path $instPath "VC\Tools\MSVC"
-          $hasMfc = Get-ChildItem $mfcDir -Directory | ForEach-Object {
-            Test-Path (Join-Path $_.FullName "atlmfc")
-          } | Where-Object { $_ }
-          Write-Host "MFC installed: $($null -ne $hasMfc)"
-          if (-not $hasMfc) {
-            Write-Host "MFC still missing - dumping installer log tail"
-            $log = Get-ChildItem "$env:TEMP\dd_setup_*" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-            if ($log) { Get-Content $log.FullName -Tail 30 }
-            exit 1
-          }
 
       - name: Build
         working-directory: ${{env.GITHUB_WORKSPACE}}
