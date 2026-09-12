@@ -32,6 +32,21 @@ IPluginItem* SPlayerLyricPlugin::GetItem(int index)
 void SPlayerLyricPlugin::DataRequired()
 {
     // WebSocket is async, data already updated by callbacks
+    // v13: 拉 TM 监控数据写快照（监控行自绘用）
+    extern ITrafficMonitor* g_pTMInterface;
+    extern void UpdateMonitorSnapshot(const double*, int);
+    if (g_pTMInterface)
+    {
+        static const ITrafficMonitor::MonitorItem items[6] = {
+            ITrafficMonitor::MI_UP, ITrafficMonitor::MI_DOWN,
+            ITrafficMonitor::MI_CPU, ITrafficMonitor::MI_MEMORY,
+            ITrafficMonitor::MI_GPU_USAGE, ITrafficMonitor::MI_CPU_TEMP,
+        };
+        double vals[6];
+        for (int i = 0; i < 6; ++i)
+            vals[i] = g_pTMInterface->GetMonitorValue(items[i]);
+        UpdateMonitorSnapshot(vals, 6);
+    }
 }
 
 const wchar_t* SPlayerLyricPlugin::GetInfo(PluginInfoIndex index)
@@ -130,6 +145,8 @@ const wchar_t* SPlayerLyricPlugin::GetTooltipInfo()
 void SPlayerLyricPlugin::OnInitialize(ITrafficMonitor* pApp)
 {
     m_pApp = pApp;
+    extern ITrafficMonitor* g_pTMInterface;   // LyricDisplayItem.cpp 定义
+    g_pTMInterface = pApp;   // v13: 监控行自绘读取数据用
 }
 
 void SPlayerLyricPlugin::InitWebSocketCallbacks()
