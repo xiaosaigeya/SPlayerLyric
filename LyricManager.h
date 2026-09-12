@@ -28,6 +28,7 @@ public:
 
     bool HasLyric() const;
     bool HasYrcData() const;
+    bool HasAnyLyricData() const;   // v10: YRC 或 LRC 任一存在（高频重绘/动画驱动用，LRC 歌也平滑换行）
     bool IsPlaying() const { return m_isPlaying; }
     int GetCurrentLineIndex() const { return m_currentLineIndex; }
     float GetWordProgress() const;
