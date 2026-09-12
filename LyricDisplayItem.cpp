@@ -434,24 +434,15 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
         // Actually, user requested "Deep/Light mode color customization". 
         // We have lightNormalColor and darkNormalColor.
         
-        secondaryColor = primaryColor; 
-        
-        // To distinguish secondary line, maybe hardcode a dimmer simple calculation or just use same color.
-        // Previous hardcoded logic: RGB(200, 200, 200) vs White.
-        // Let's try to slightly dim it if it's near white.
-        if (GetRValue(primaryColor) > 200 && GetGValue(primaryColor) > 200 && GetBValue(primaryColor) > 200)
-             secondaryColor = RGB(200, 200, 200);
-             
+        secondaryColor = primaryColor;
+        // v18: 歌词三行统一与监控同色（用户需求：只有当前句逐字效果区分层级）
         highlightColor = config.darkHighlightColor;
     }
     else
     {
         primaryColor = config.lightNormalColor;
         secondaryColor = primaryColor;
-        // Dim slightly if near black?
-        if (GetRValue(primaryColor) < 50 && GetGValue(primaryColor) < 50 && GetBValue(primaryColor) < 50)
-             secondaryColor = RGB(80, 80, 80);
-             
+        // v18: 同上，亮色模式也不降亮度
         highlightColor = config.lightHighlightColor;
     }
     
@@ -474,10 +465,7 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     //   B 行（旧当前→新prev）：highlight(YRC唱满)/primary → prevRoleColor（bandT 插值）
     //   C 行（旧next→新当前）：secondary → primary（bandT 插值；YRC 基色用它）
     //   A 行（旧顶行离场）：恒 prevRoleColor   D 行（新next 入场）：恒 secondary
-    COLORREF prevRoleColor = RGB(
-        (GetRValue(secondaryColor) * 3) / 5,
-        (GetGValue(secondaryColor) * 3) / 5,
-        (GetBValue(secondaryColor) * 3) / 5);   // 60% dim（与 prev 槽一致）
+    COLORREF prevRoleColor = primaryColor;   // v18: 顶行不再降亮度——三行与监控同色，仅逐字高亮区分当前句
     COLORREF leaveCurColor = primaryColor;    // B 行（YRC 时换成 highlight 起点）
     COLORREF enterCurColor = primaryColor;    // C 行（静止时=primary 正确）
     {
