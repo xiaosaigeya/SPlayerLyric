@@ -13,6 +13,22 @@
 // Static instance pointer for timer callback
 static LyricDisplayItem* g_pLyricItem = nullptr;
 
+// ---- v12: 描边文字绘制（任何背景色可读，替代底衬方案）----
+// 白字 + 1px 深色描边（四方向垫底再画正文）：白底页面描边勾出字形，深色背景白字本体清晰。
+// GDI 逐字符 TextOut 四次偏移绘制实现描边（BeginPath 方案在 TM 的 DC 上有兼容性问题且性能差）。
+static void OutlinedTextOut(HDC dc, int x, int y, const std::wstring& text, COLORREF color)
+{
+    const COLORREF edge = RGB(20, 20, 24);   // 描边色（近黑）
+    COLORREF old = SetTextColor(dc, edge);
+    TextOutW(dc, x - 1, y, text.c_str(), (int)text.length());
+    TextOutW(dc, x + 1, y, text.c_str(), (int)text.length());
+    TextOutW(dc, x, y - 1, text.c_str(), (int)text.length());
+    TextOutW(dc, x, y + 1, text.c_str(), (int)text.length());
+    SetTextColor(dc, color);
+    TextOutW(dc, x, y, text.c_str(), (int)text.length());
+    SetTextColor(dc, old);
+}
+
 LyricDisplayItem::LyricDisplayItem()
 {
     g_pLyricItem = this;
@@ -525,9 +541,9 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
             const auto& word = words[i];
             int width = wordSizes[i].cx;
 
-            // 1. Draw Normal Text (Background) —— v8: C 行用角色过渡色（动画期从 next 暗色渐变为 cur 基色）
-            SetTextColor(dc, m_dualInTransition ? enterCurColor : primaryColor);
-            TextOutW(dc, curX, textY1, word.text.c_str(), (int)word.text.length());
+            // 1. Draw Normal Text (Background) —— v8 角色色 + v12 描边（全背景可读）
+            OutlinedTextOut(dc, curX, textY1, word.text,
+                            m_dualInTransition ? enterCurColor : primaryColor);
 
             // 2. Draw Highlight Text (Foreground with clip)
             long long endTime = word.startTime + word.duration;
@@ -548,7 +564,7 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
                     ExtSelectClipRgn(dc, wordClip, RGN_AND);
                     
                     SetTextColor(dc, highlightColor);
-                    TextOutW(dc, curX, textY1, word.text.c_str(), (int)word.text.length());
+                    TextOutW(dc, curX, textY1, word.text.c_str(), (int)word.text.length());  // 高亮填充层（描边由底色层负责）
                     
                     RestoreDC(dc, saveId);
                     DeleteObject(wordClip);
@@ -563,7 +579,7 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     }
     else
     {
-        // Simple text for first line —— v8: C 行角色色（动画期从 next 暗色渐变到 cur 基色）
+        // Simple text for first line —— v8 角色色 + v12 描边
         SetTextColor(dc, m_dualInTransition ? enterCurColor : primaryColor);
         SIZE size1;
         GetTextExtentPoint32W(dc, line1.c_str(), (int)line1.length(), &size1);
@@ -591,7 +607,8 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
         
         HRGN clipRgn1 = CreateRectRgn(x, line1Y, x + w, line1Y + lineHeight + 2);
         SelectClipRgn(dc, clipRgn1);
-        TextOutW(dc, textX1, textY1, line1.c_str(), (int)line1.length());
+        OutlinedTextOut(dc, textX1, textY1, line1,
+                        m_dualInTransition ? enterCurColor : primaryColor);
         SelectClipRgn(dc, NULL);
         DeleteObject(clipRgn1);
     }
@@ -623,7 +640,7 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     // Clip for second line - allow a bit room at top for ascenders
     HRGN clipRgn2 = CreateRectRgn(x, y, x + w, y + h);
     SelectClipRgn(dc, clipRgn2);
-    TextOutW(dc, textX2, textY2, line2.c_str(), (int)line2.length());
+    OutlinedTextOut(dc, textX2, textY2, line2, secondaryColor);
     SelectClipRgn(dc, NULL);
     DeleteObject(clipRgn2);
 
@@ -656,7 +673,7 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
         }
         HRGN clipA = CreateRectRgn(x, y, x + w, y + h);   // 裁剪到显示区，滚出部分不绘制
         SelectClipRgn(dc, clipA);
-        TextOutW(dc, tX, tY, m_dualTopRowText.c_str(), (int)m_dualTopRowText.length());
+        OutlinedTextOut(dc, tX, tY, m_dualTopRowText, aColor);
         SelectClipRgn(dc, NULL);
         DeleteObject(clipA);
     }
@@ -688,7 +705,8 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
             }
             HRGN clipRgn0 = CreateRectRgn(x, y, x + w, y + h);
             SelectClipRgn(dc, clipRgn0);
-            TextOutW(dc, textX0, textY0, line0.c_str(), (int)line0.length());
+            OutlinedTextOut(dc, textX0, textY0, line0,
+                            m_dualInTransition ? leaveCurColor : prevRoleColor);
             SelectClipRgn(dc, NULL);
             DeleteObject(clipRgn0);
         }
