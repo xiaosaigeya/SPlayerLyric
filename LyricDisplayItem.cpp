@@ -30,9 +30,11 @@ void UpdateMonitorSnapshot()
     for (int i = 0; i < 6; ++i)
     {
         const wchar_t* s = g_pTMInterface->GetMonitorValueString(items[i]);
-        g_monText[i] = s ? s : L"";
+        if (s && s[0] != L'\0')          // 防御：空/未就绪文案不覆盖（v15 疑似崩溃点加固）
+            g_monText[i] = s;
     }
-    g_monValid = true;
+    if (g_monText[0][0] != L'\0')        // 首项有效才置位（防启动期空指针链）
+        g_monValid = true;
 }
 
 // GDI+ 初始化（EdgeTextOut 依赖；进程级一次）
@@ -48,6 +50,11 @@ static struct GdiplusInit {
 // ---- v15: 抗锯齿路径描边文字（GraphicsPath + Widen，白底/深底全可读）----
 // 与 v12 GDI 硬描边的区别：GDI+ 路径填充边缘抗锯齿，1px 细边柔和不糊字。
 // 监控/歌词统一用此函数。可选 clip（逐字高亮填充层）。
+// ---- v16: 亮度自适应抗锯齿描边文字（白底全可读 + 性能最优）----
+// 亮色字（白/浅色，亮度>160）：四方向 1px 抗锯齿深色描边——白底勾出完整轮廓，
+//   GDI+ 边缘柔和（对比 v12 GDI 硬描边不显粗）。
+// 暗色字/绿色高亮：对白底本就可读，直接绘制（1 次，性能友好）。
+// 监控/歌词统一走此函数。可选 clip（逐字高亮填充层）。
 static void EdgeTextOut(HDC dc, float x, float y, const std::wstring& text,
                         COLORREF color, HFONT font,
                         float clipX = -1.0f, float clipW = 0.0f)
@@ -55,31 +62,30 @@ static void EdgeTextOut(HDC dc, float x, float y, const std::wstring& text,
     if (text.empty() || font == nullptr) return;
     Gdiplus::Graphics gfx(dc);
     gfx.SetTextRenderingHint(Gdiplus::TextRenderingHintAntiAlias);
-    gfx.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     Gdiplus::Font gfont(dc, font);
     if (gfont.GetLastStatus() != Gdiplus::Ok) return;
-    Gdiplus::FontFamily ff;
-    if (gfont.GetFamily(&ff) != Gdiplus::Ok) return;
-    Gdiplus::GraphicsPath path;
-    Gdiplus::PointF origin(x, y);
-    path.AddString(text.c_str(), -1, &ff, gfont.GetStyle(), gfont.GetSize(),
-                   origin, Gdiplus::StringFormat::GenericTypographic());
+    Gdiplus::StringFormat sf;
+    sf.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap
+                      | Gdiplus::StringFormatFlagsNoClip);
+    sf.SetAlignment(Gdiplus::StringAlignmentNear);
+    sf.SetLineAlignment(Gdiplus::StringAlignmentNear);
     if (clipW > 0.0f)
+        gfx.SetClip(Gdiplus::RectF(clipX, y - 8.0f, clipW, 260.0f));
+    int lum = (GetRValue(color) * 299 + GetGValue(color) * 587 + GetBValue(color) * 114) / 1000;
+    if (lum > 120)   // 白(255)/绿高亮(149)/浅灰(154+)都描边；深灰(85)对白底本就可读不描
     {
-        Gdiplus::RectF clipR(clipX, y - 8.0f, clipW, 260.0f);
-        gfx.SetClip(clipR);
+        // 四方向 1px 描边（抗锯齿柔和，完整轮廓）
+        Gdiplus::SolidBrush edgeB(Gdiplus::Color(215, 14, 14, 20));
+        const float O = 1.0f;
+        Gdiplus::PointF pts[4] = {
+            Gdiplus::PointF(x - O, y), Gdiplus::PointF(x + O, y),
+            Gdiplus::PointF(x, y - O), Gdiplus::PointF(x, y + O) };
+        for (int i = 0; i < 4; ++i)
+            gfx.DrawString(text.c_str(), -1, &gfont, pts[i], &sf, &edgeB);
     }
-    // 边：Widen 扩张 2.0px pen（每边约 1px）后填充深色——抗锯齿柔和细边
-    Gdiplus::Pen edgePen(Gdiplus::Color(220, 16, 16, 22), 2.0f);
-    Gdiplus::GraphicsPath widePath;
-    widePath.AddPath(&path, FALSE);
-    widePath.Widen(&edgePen);
-    Gdiplus::SolidBrush edgeB(Gdiplus::Color(220, 16, 16, 22));
-    gfx.FillPath(&edgeB, &widePath);
-    // 本体
     Gdiplus::SolidBrush bodyB(Gdiplus::Color(255,
         GetRValue(color), GetGValue(color), GetBValue(color)));
-    gfx.FillPath(&bodyB, &path);
+    gfx.DrawString(text.c_str(), -1, &gfont, Gdiplus::PointF(x, y), &sf, &bodyB);
 }
 
 LyricDisplayItem::LyricDisplayItem()
@@ -315,8 +321,9 @@ void LyricDisplayItem::DrawItem(void* hDC, int x, int y, int w, int h, bool dark
         DrawSimpleText(dc, x, y, w, h, dark_mode);
     }
 
-    // ---- v15: 监控行插件自绘（文案=TM 原生 GetMonitorValueString，描边字白底可读）----
-    // 行1: ↑速度  CPU  温度   行2: ↓速度  内存  显卡（仅悬浮窗三行模式，歌词区下方）
+    // ---- v16: 监控行插件自绘（文案=TM 原生 GetMonitorValueString + 皮肤同款标签，描边字白底可读）----
+    // 行1: ↑: 速度   CPU: xx%   温度: xx°C   行2: ↓: 速度   内存: xx%   显卡: xx%
+    // （仅悬浮窗；标签与 [skin_LT01-Lyric] 原生渲染一字不差）
     if (config.desktopDualLine && h >= 100 && g_monValid)
     {
         int dpi2 = GetDeviceCaps(dc, LOGPIXELSY);
@@ -329,18 +336,21 @@ void LyricDisplayItem::DrawItem(void* hDC, int x, int y, int w, int h, bool dark
             config.fontName.c_str());
         if (monFont)
         {
-            // 原生文案直接拼接（"↑: 12KB/s" 等，含皮肤 display_text 前缀由 TM 处理）
-            std::wstring lineA = g_monText[0] + L"    " + g_monText[2] + L"    " + g_monText[5];
-            std::wstring lineB = g_monText[1] + L"    " + g_monText[3] + L"    " + g_monText[4];
-            COLORREF monColor = dark_mode ? RGB(220, 228, 236) : RGB(70, 84, 100);
-            SIZE szA;
+            std::wstring lineA = L"\u2191: " + g_monText[0] + L"    CPU: " + g_monText[2]
+                + L"    \u6e29\u5ea6: " + g_monText[5];
+            std::wstring lineB = L"\u2193: " + g_monText[1] + L"    \u5185\u5b58: " + g_monText[3]
+                + L"    \u663e\u5361: " + g_monText[4];
+            COLORREF monColor = dark_mode ? RGB(220, 228, 236) : RGB(225, 230, 238);
             HFONT oldMon = (HFONT)SelectObject(dc, monFont);
+            SIZE szA, szB;
             GetTextExtentPoint32W(dc, lineA.c_str(), (int)lineA.length(), &szA);
+            GetTextExtentPoint32W(dc, lineB.c_str(), (int)lineB.length(), &szB);
             int textH = szA.cy;
-            int monY = y + h - textH * 2 - 8;
+            int monY = y + h - textH * 2 - 10;
             int xa = x + (w - szA.cx) / 2;
+            int xb = x + (w - szB.cx) / 2;
             EdgeTextOut(dc, (float)xa, (float)monY, lineA, monColor, monFont);
-            EdgeTextOut(dc, (float)xa, (float)(monY + textH + 4), lineB, monColor, monFont);
+            EdgeTextOut(dc, (float)xb, (float)(monY + textH + 5), lineB, monColor, monFont);
             SelectObject(dc, oldMon);
             DeleteObject(monFont);
         }
