@@ -192,6 +192,21 @@ std::wstring LyricManager::GetSongInfoText() const
     return std::wstring();
 }
 
+// v28: 暂停态显示——强制「歌名 - 歌手」格式（GetSongInfoText 的 title 优先路径不带歌手）
+std::wstring LyricManager::GetSongArtistText() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+
+    std::wstring name = m_songInfo.title.empty() ? m_songInfo.name : m_songInfo.title;
+    if (!name.empty())
+    {
+        if (!m_songInfo.artist.empty())
+            return name + L" - " + m_songInfo.artist;
+        return name;
+    }
+    return std::wstring();
+}
+
 bool LyricManager::HasLyric() const
 {
     std::lock_guard<std::mutex> lock(m_mutex);

@@ -25,6 +25,8 @@ public:
     std::wstring GetPrevLyricText() const;
     std::wstring GetCurrentTranslation() const;
     std::wstring GetSongInfoText() const;
+    // v28: 暂停态显示格式——「歌名 - 歌手」（title 可能为空/纯歌名，此处强制带歌手）
+    std::wstring GetSongArtistText() const;
 
     bool HasLyric() const;
     bool HasYrcData() const;

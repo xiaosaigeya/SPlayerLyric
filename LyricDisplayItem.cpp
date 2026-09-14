@@ -362,12 +362,22 @@ void LyricDisplayItem::DrawDualLine(HDC dc, int x, int y, int w, int h, bool dar
     
     // If no current lyric, show song info or default
     bool idleMode = false;
-    if (line1.empty())
+    // v28: 暂停态折叠进空闲渲染——任务栏灰「歌名 - 歌手」/ 悬浮窗卡片 + ‖已暂停状态行。
+    // 连接正常 + 已暂停即触发（用户需求：暂停一律显示灰歌名，覆盖 v27 末句暂停驻留；
+    // 末句满绿驻留仅保留在「播放中尾奏」场景）。
+    bool pausedMode = (g_wsClient.IsConnected() && !g_lyricMgr.IsPlaying());
+    if (line1.empty() || pausedMode)
     {
         idleMode = true;
         if (!g_wsClient.IsConnected())
         {
             line1 = g_config.StringRes(IDS_NOT_CONNECTED);
+        }
+        else if (pausedMode)
+        {
+            line1 = g_lyricMgr.GetSongArtistText();   // 「歌名 - 歌手」
+            if (line1.empty())
+                line1 = g_lyricMgr.GetSongInfoText();
         }
         else
         {
